@@ -1,13 +1,14 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.2.0
+ * 코드 버전: v1.3.0
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - manifest.json 의 "version" 과 style.css 맨 위 버전도 같은 숫자로 같이 올리기
- *   - 작은 수정(버그, 문구, 디자인): 1.2.0 → 1.2.1
- *   - 기능 추가/변경:               1.2.0 → 1.3.0
+ *   - 작은 수정(버그, 문구, 디자인): 1.3.0 → 1.3.1
+ *   - 기능 추가/변경:               1.3.0 → 1.4.0
  *
  * 변경 기록
+ *   v1.3.0  새로고침 방지 강화(스크립트가 일으키는 새로고침을 Navigation API로 차단 + 알림), 버튼 크기 축소, 초록/빨강 색
  *   v1.2.0  팝업 디자인 개선(둥근 모서리, 응/아니 색), '새로고침 전 확인' → '새로고침 팝업'(켜기/끄기)
  *   v1.1.0  실리태번 기본 팝업 사용, 팝업 위치/탭 닫힘 문제 수정
  *   v1.0.0  첫 버전
@@ -178,11 +179,33 @@ function askConfirmFallback() {
 
 /* ---------------- 새로고침 방지 ---------------- */
 
+// (예비) Navigation API가 없는 브라우저에서만 사용: 새로고침 전에 브라우저 확인창
 function onBeforeUnload(e) {
     if (manualReload) return;
     e.preventDefault();
     e.returnValue = '';
     return '';
+}
+
+let lastBlockedToast = 0;
+function notifyBlocked() {
+    const now = Date.now();
+    if (now - lastBlockedToast < 4000) return;
+    lastBlockedToast = now;
+    if (typeof toastr !== 'undefined') {
+        toastr.warning('자동 새로고침을 막았어요. 필요하면 새로고침 버튼을 눌러주세요.', NAME);
+    }
+}
+
+// 페이지/확장이 스스로 일으키는 새로고침(location.reload 등)을 취소.
+// 사용자가 브라우저 자체로 하는 새로고침(F5, 당겨서 새로고침)은 userInitiated라서 건드리지 않음.
+function onNavigate(e) {
+    if (manualReload || e.userInitiated || !e.cancelable) return;
+    const isReload = e.navigationType === 'reload';
+    const isSameUrl = !e.destination?.sameDocument && e.destination?.url === location.href;
+    if (!isReload && !isSameUrl) return;
+    e.preventDefault();
+    notifyBlocked();
 }
 
 // Web Lock을 쥐고 있으면 브라우저가 탭을 정리할 때 덜 건드리는 경우가 있음 (보장은 아님)
@@ -204,10 +227,13 @@ function releaseLock() {
 function applyGuard() {
     const s = getSettings();
     const on = s.enabled && s.guard;
+    const nav = window.navigation;
     document.documentElement.classList.toggle('rf-guard', on);
     window.removeEventListener('beforeunload', onBeforeUnload);
+    nav?.removeEventListener('navigate', onNavigate);
     if (on) {
-        window.addEventListener('beforeunload', onBeforeUnload);
+        if (nav) nav.addEventListener('navigate', onNavigate);
+        else window.addEventListener('beforeunload', onBeforeUnload);
         acquireLock();
     } else {
         releaseLock();
