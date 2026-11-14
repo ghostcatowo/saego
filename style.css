@@ -1,107 +1,234 @@
-.st-refresh-settings .inline-drawer-content {
-    padding: 0.5em 0;
+/* 새로고침 확장
+ * 주의: .inline-drawer-content 의 display는 건드리지 않는다. (접기/펼치기는 SillyTavern이 제어)
+ */
+
+.rf-settings,
+.rf-overlay {
+    --rf-accent: var(--SmartThemeQuoteColor, #6aa8ff);
+    --rf-line: var(--SmartThemeBorderColor, rgba(127, 127, 127, 0.4));
+    --rf-fill: rgba(127, 127, 127, 0.1);
+    --rf-fill-strong: rgba(127, 127, 127, 0.28);
 }
 
-.st-refresh-settings .checkbox_label {
+@supports (background: color-mix(in srgb, red 10%, transparent)) {
+    .rf-settings,
+    .rf-overlay {
+        --rf-fill-strong: color-mix(in srgb, var(--rf-accent) 24%, transparent);
+    }
+}
+
+/* ---------------- 헤더 표시등 (초록=방지 켜짐, 빨강=꺼짐) ---------------- */
+.rf-settings .rf-status {
+    flex: 0 0 auto;
+    width: 11px;
+    height: 11px;
+    margin-left: auto;
+    margin-right: 12px;
+    border-radius: 50%;
+    background: #e5534b;
+    box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.22);
+    transition: background 0.2s, box-shadow 0.2s;
+}
+
+.rf-settings .rf-status.rf-on  { background: #3fb950; box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.22); }
+.rf-settings .rf-status.rf-off { background: #e5534b; box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.22); }
+
+/* ---------------- 새로고침 버튼 ---------------- */
+.rf-settings .rf-reload {
     display: flex;
     align-items: center;
-    gap: 0.5em;
-    min-height: 2.75rem;
-    margin: 0.35em 0;
-    touch-action: manipulation;
-}
-
-.st-refresh-settings .checkbox_label input {
-    flex: 0 0 auto;
-}
-
-.st-refresh-settings-action {
-    display: flex;
-    margin-top: 0.75em;
-}
-
-.st-refresh-settings-action button {
-    min-width: 2.75rem;
-    min-height: 2.75rem;
-    touch-action: manipulation;
-}
-
-.st-refresh-wand-item {
+    justify-content: center;
+    gap: 10px;
     width: 100%;
-    min-height: 2.75rem;
-    border: 0;
-    text-align: left;
+    max-width: 480px;
+    min-height: 46px;
+    margin: 10px 0 4px;
+    padding: 0 16px;
+    box-sizing: border-box;
+    border: 1px solid var(--rf-line);
+    border-radius: 12px;
+    background: var(--rf-fill);
+    color: var(--SmartThemeBodyColor);
+    font: inherit;
+    font-weight: 600;
     cursor: pointer;
-    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
 }
 
-.st-refresh-dialog-overlay {
+.rf-settings .rf-reload i {
+    margin: 0;
+    line-height: 1;
+    transition: transform 0.4s ease;
+}
+
+@media (hover: hover) {
+    .rf-settings .rf-reload:hover:not(:disabled) {
+        border-color: var(--rf-accent);
+        background: var(--rf-fill-strong);
+    }
+    .rf-settings .rf-reload:hover:not(:disabled) i { transform: rotate(180deg); }
+}
+
+.rf-settings .rf-reload:active:not(:disabled) {
+    transform: scale(0.985);
+    border-color: var(--rf-accent);
+    background: var(--rf-fill-strong);
+}
+
+.rf-settings .rf-reload:active:not(:disabled) i { transform: rotate(180deg); }
+
+.rf-settings .rf-reload:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---------------- 설정 블록 ---------------- */
+.rf-settings .rf-block {
+    padding: 14px 0 4px;
+    margin-top: 12px;
+    border-top: 1px solid var(--rf-line);
+}
+
+.rf-settings .rf-title {
+    font-weight: 600;
+}
+
+.rf-settings .rf-hint {
+    margin: 3px 0 10px;
+    font-size: 0.82em;
+    line-height: 1.45;
+    opacity: 0.65;
+    word-break: keep-all;
+}
+
+/* ---------------- 두 칸 선택 ---------------- */
+.rf-settings .rf-seg {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    max-width: 480px;
+    margin-bottom: 10px;
+    padding: 4px;
+    box-sizing: border-box;
+    border: 1px solid var(--rf-line);
+    border-radius: 12px;
+    background: var(--rf-fill);
+}
+
+.rf-settings .rf-seg button {
+    min-height: 40px;
+    margin: 0;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--SmartThemeBodyColor);
+    font: inherit;
+    font-size: 0.92em;
+    white-space: nowrap;
+    opacity: 0.65;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, opacity 0.15s, box-shadow 0.15s;
+}
+
+.rf-settings .rf-seg button[aria-checked="true"] {
+    background: var(--rf-fill-strong);
+    box-shadow: inset 0 0 0 1px var(--rf-accent);
+    font-weight: 600;
+    opacity: 1;
+}
+
+.rf-settings .rf-seg button:disabled { cursor: not-allowed; }
+
+.rf-settings.rf-disabled .rf-block:not([data-key="enabled"]) { opacity: 0.4; }
+
+.rf-settings .rf-reload:focus-visible,
+.rf-settings .rf-seg button:focus-visible,
+.rf-overlay button:focus-visible {
+    outline: 2px solid var(--rf-accent);
+    outline-offset: 2px;
+}
+
+/* ---------------- 확인 팝업 ---------------- */
+.rf-overlay {
     position: fixed;
     inset: 0;
     z-index: 100000;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 20px;
     box-sizing: border-box;
-    padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
-        max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
-    background: rgb(0 0 0 / 55%);
-    overscroll-behavior: contain;
+    background: rgba(0, 0, 0, 0.45);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+    animation: rf-fade 0.14s ease-out;
 }
 
-.st-refresh-dialog {
+.rf-overlay .rf-dialog {
+    width: 100%;
+    max-width: 320px;
+    padding: 24px 18px 18px;
     box-sizing: border-box;
-    width: min(22rem, 100%);
-    max-width: 100%;
-    padding: 1.25rem;
-    border: 1px solid var(--SmartThemeBorderColor, #666);
-    border-radius: 10px;
-    background: var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor, #222));
-    color: var(--SmartThemeTextColor, #fff);
-    box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+    border: 1px solid var(--rf-line);
+    border-radius: 16px;
+    background: var(--SmartThemeBlurTintColor, #1c1c1e);
+    color: var(--SmartThemeBodyColor, #eee);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    animation: rf-pop 0.16s ease-out;
 }
 
-.st-refresh-dialog-title {
-    margin-bottom: 1.25rem;
+.rf-overlay .rf-dialog-text {
+    margin: 0 0 20px;
     text-align: center;
-    font-size: 1.05rem;
+    font-size: 1.1em;
     font-weight: 600;
 }
 
-.st-refresh-dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
+.rf-overlay .rf-dialog-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
 }
 
-.st-refresh-dialog-actions button {
-    min-width: 4.25rem;
-    min-height: 2.75rem;
-    padding: 0.5rem 1rem;
-    border: 1px solid var(--SmartThemeBorderColor, #777);
-    border-radius: 6px;
-    background: var(--SmartThemeBlurTintColor, #333);
-    color: var(--SmartThemeTextColor, #fff);
+.rf-overlay .rf-dialog-actions button {
+    min-height: 46px;
+    margin: 0;
+    padding: 0 12px;
+    border-radius: 11px;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
     cursor: pointer;
-    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.1s, background 0.15s;
 }
 
-.st-refresh-dialog-actions .st-refresh-accept {
-    background: var(--SmartThemeQuoteColor, #555);
+.rf-overlay .rf-dialog-actions button:active { transform: scale(0.97); }
+
+.rf-overlay .rf-btn-no {
+    border: 1px solid var(--rf-line);
+    background: var(--rf-fill);
 }
 
-.st-refresh-dialog-actions button:hover {
-    filter: brightness(1.15);
+.rf-overlay .rf-btn-yes {
+    border: 1px solid var(--rf-accent);
+    background: var(--rf-fill-strong);
 }
 
-@media (max-width: 600px) {
-    .st-refresh-dialog {
-        width: min(22rem, 100%);
-        padding: 1rem;
-    }
+@keyframes rf-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rf-pop  { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
 
-    .st-refresh-dialog-actions button {
-        flex: 1 1 0;
-        min-height: 3rem;
-    }
+/* 당겨서 새로고침(모바일 크롬) 막기 */
+html.rf-guard,
+html.rf-guard body {
+    overscroll-behavior-y: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rf-overlay,
+    .rf-overlay .rf-dialog { animation: none; }
+    .rf-settings .rf-reload i,
+    .rf-settings .rf-status { transition: none; }
 }

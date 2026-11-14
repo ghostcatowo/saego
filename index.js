@@ -1,262 +1,244 @@
-const MODULE_NAME = 'st_refresh_extension';
-const EXTENSION_NAME = '🔄 새로고침';
-const MENU_ITEM_ID = 'st-refresh-wand-item';
-const SETTINGS_ID = 'st-refresh-extension-settings';
-const DIALOG_ID = 'st-refresh-confirm-dialog';
+import { extension_settings } from '../../../extensions.js';
+import { saveSettingsDebounced } from '../../../../script.js';
 
-const DEFAULT_SETTINGS = Object.freeze({
-    enabled: true,
-    confirmBeforeRefresh: true,
-});
+const MODULE = 'refresh_button';
+const NAME = '새로고침';
+const FLAG = 'rf_manual_reload';
+const DEFAULTS = { enabled: true, confirm: true, guard: true };
 
-let settings;
-let saveSettingsDebounced;
-let uiObserver;
-let menuObserver;
-let syncQueued = false;
+let popupOpen = false;
+let manualReload = false;
+let lockAbort = null;
 
-function loadSettings() {
-    const context = SillyTavern.getContext();
-    const extensionSettings = context.extensionSettings;
-    saveSettingsDebounced = context.saveSettingsDebounced;
+/* ---------------- 설정 ---------------- */
 
-    if (!extensionSettings[MODULE_NAME] || typeof extensionSettings[MODULE_NAME] !== 'object') {
-        extensionSettings[MODULE_NAME] = { ...DEFAULT_SETTINGS };
+function getSettings() {
+    if (!extension_settings[MODULE]) extension_settings[MODULE] = {};
+    const s = extension_settings[MODULE];
+    for (const key of Object.keys(DEFAULTS)) {
+        if (typeof s[key] !== 'boolean') s[key] = DEFAULTS[key];
     }
+    return s;
+}
 
-    settings = extensionSettings[MODULE_NAME];
-    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-        if (typeof settings[key] === 'undefined') {
-            settings[key] = value;
+/* ---------------- 새로고침 ---------------- */
+
+function doReload() {
+    manualReload = true;
+    try { sessionStorage.setItem(FLAG, '1'); } catch { /* 무시 */ }
+    location.reload();
+}
+
+async function requestReload() {
+    const s = getSettings();
+    if (!s.enabled || popupOpen) return;
+    if (s.confirm && !(await askConfirm())) return;
+    doReload();
+}
+
+/* ---------------- 확인 팝업 ---------------- */
+
+function askConfirm() {
+    return new Promise((resolve) => {
+        popupOpen = true;
+        const prevFocus = document.activeElement;
+        const openedAt = Date.now();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'rf-overlay';
+        overlay.innerHTML = `
+            <div class="rf-dialog" role="alertdialog" aria-modal="true" aria-labelledby="rf-dialog-text">
+                <p class="rf-dialog-text" id="rf-dialog-text">새로고침 할래?</p>
+                <div class="rf-dialog-actions">
+                    <button type="button" class="rf-btn-no">아니</button>
+                    <button type="button" class="rf-btn-yes">응</button>
+                </div>
+            </div>`;
+
+        const btnNo = overlay.querySelector('.rf-btn-no');
+        const btnYes = overlay.querySelector('.rf-btn-yes');
+
+        const close = (result) => {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            popupOpen = false;
+            try { prevFocus?.focus?.(); } catch { /* 무시 */ }
+            resolve(result);
+        };
+
+        function onKey(e) {
+            if (e.key === 'Escape' || e.key === 'Esc') {
+                e.preventDefault();
+                e.stopPropagation();
+                close(false);
+            } else if (e.key === 'Tab') {
+                const active = document.activeElement;
+                if (e.shiftKey && active === btnNo) { e.preventDefault(); btnYes.focus(); }
+                else if (!e.shiftKey && active === btnYes) { e.preventDefault(); btnNo.focus(); }
+                else if (active !== btnNo && active !== btnYes) { e.preventDefault(); btnNo.focus(); }
+            }
         }
-    }
-    saveSettingsDebounced();
-}
 
-function saveSettings() {
-    saveSettingsDebounced?.();
-}
+        // 팝업을 연 터치가 바로 바깥 클릭으로 처리되는 것을 막기 위해 잠깐 무시
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay && Date.now() - openedAt > 250) close(false);
+        });
+        btnNo.addEventListener('click', () => close(false));
+        btnYes.addEventListener('click', () => close(true));
+        document.addEventListener('keydown', onKey, true);
 
-function refreshPage() {
-    closeConfirmDialog();
-    window.location.reload();
-}
-
-function closeConfirmDialog() {
-    const overlay = document.getElementById(DIALOG_ID);
-    if (!overlay) return;
-    overlay.remove();
-}
-
-function showConfirmDialog() {
-    if (document.getElementById(DIALOG_ID)) return;
-
-    const overlay = document.createElement('div');
-    overlay.id = DIALOG_ID;
-    overlay.className = 'st-refresh-dialog-overlay';
-    overlay.innerHTML = `
-        <section class="st-refresh-dialog" role="dialog" aria-modal="true" aria-labelledby="st-refresh-dialog-title">
-            <div id="st-refresh-dialog-title" class="st-refresh-dialog-title">새로고침 할래?</div>
-            <div class="st-refresh-dialog-actions">
-                <button type="button" class="st-refresh-cancel">아니</button>
-                <button type="button" class="st-refresh-accept">응</button>
-            </div>
-        </section>
-    `;
-
-    overlay.addEventListener('click', (event) => {
-        if (event.target === overlay) closeConfirmDialog();
+        document.body.appendChild(overlay);
+        btnNo.focus();
     });
-
-    const cancelButton = overlay.querySelector('.st-refresh-cancel');
-    const acceptButton = overlay.querySelector('.st-refresh-accept');
-    cancelButton.addEventListener('click', closeConfirmDialog);
-    acceptButton.addEventListener('click', refreshPage);
-
-    document.body.appendChild(overlay);
-    cancelButton.focus({ preventScroll: true });
 }
 
-function requestRefresh() {
-    if (!settings?.enabled) return;
-    if (settings.confirmBeforeRefresh) {
-        showConfirmDialog();
+/* ---------------- 새로고침 방지 ---------------- */
+
+function onBeforeUnload(e) {
+    if (manualReload) return;
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+}
+
+// Web Lock을 쥐고 있으면 브라우저가 탭을 정리할 때 덜 건드리는 경우가 있음 (보장은 아님)
+function acquireLock() {
+    if (lockAbort || !navigator.locks) return;
+    const ac = new AbortController();
+    lockAbort = ac;
+    navigator.locks
+        .request(`rf-keepalive-${Math.random().toString(36).slice(2)}`, { signal: ac.signal }, () =>
+            new Promise((resolve) => ac.signal.addEventListener('abort', resolve, { once: true })))
+        .catch(() => { /* 무시 */ });
+}
+
+function releaseLock() {
+    lockAbort?.abort();
+    lockAbort = null;
+}
+
+function applyGuard() {
+    const s = getSettings();
+    const on = s.enabled && s.guard;
+    document.documentElement.classList.toggle('rf-guard', on);
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    if (on) {
+        window.addEventListener('beforeunload', onBeforeUnload);
+        acquireLock();
     } else {
-        refreshPage();
+        releaseLock();
     }
 }
 
-function handleDialogKeydown(event) {
-    const overlay = document.getElementById(DIALOG_ID);
-    if (!overlay) return;
+// 직접 누르지 않은 새로고침/재로드로 열렸다면 알려줌
+function notifyIfReloaded() {
+    const s = getSettings();
+    let wasManual = false;
+    try {
+        wasManual = sessionStorage.getItem(FLAG) === '1';
+        sessionStorage.removeItem(FLAG);
+    } catch { /* 무시 */ }
+    if (!s.enabled || !s.guard || wasManual) return;
 
-    if (event.key === 'Escape') {
-        event.preventDefault();
-        closeConfirmDialog();
-        return;
-    }
-
-    if (event.key === 'Tab') {
-        const buttons = [...overlay.querySelectorAll('button:not(:disabled)')];
-        if (buttons.length !== 2) return;
-        const first = buttons[0];
-        const last = buttons[buttons.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-            event.preventDefault();
-            last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-        }
+    const nav = performance.getEntriesByType?.('navigation')?.[0];
+    if (document.wasDiscarded || nav?.type === 'reload') {
+        if (typeof toastr !== 'undefined') toastr.info('페이지가 다시 불러와졌어요.', NAME);
     }
 }
 
-function findSettingsPanel() {
-    // These are the standard SillyTavern extension settings containers.
-    return document.querySelector('#extensions_settings2, #extensions_settings');
+/* ---------------- UI ---------------- */
+
+function segBlock(key, title, hint, labelOn, labelOff) {
+    return `
+        <div class="rf-block" data-key="${key}">
+            <div class="rf-title">${title}</div>
+            <div class="rf-hint">${hint}</div>
+            <div class="rf-seg" role="radiogroup" aria-label="${title}">
+                <button type="button" role="radio" data-val="1">${labelOn}</button>
+                <button type="button" role="radio" data-val="0">${labelOff}</button>
+            </div>
+        </div>`;
 }
 
-function findWandMenu() {
-    // The list-group is preferred when present; fall back to the menu container.
-    return document.querySelector(
-        '#extensionsMenu .list-group, #extensions_menu .list-group, #extensionsMenu, #extensions_menu'
-    );
-}
-
-function renderSettings() {
-    if (document.getElementById(SETTINGS_ID)) return true;
-
-    const settingsPanel = findSettingsPanel();
-    if (!settingsPanel) return false;
-
-    const container = document.createElement('div');
-    container.id = SETTINGS_ID;
-    container.className = 'st-refresh-settings';
-    container.innerHTML = `
+function buildSettingsHtml() {
+    return `
+    <div class="rf-settings extension_container">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>${EXTENSION_NAME}</b>
+                <b><i class="fa-solid fa-rotate"></i> ${NAME}</b>
+                <span class="rf-status" role="img"></span>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
-                <label class="checkbox_label" for="st-refresh-enabled">
-                    <input id="st-refresh-enabled" type="checkbox">
-                    <span>활성화</span>
-                </label>
-                <label class="checkbox_label" for="st-refresh-confirm">
-                    <input id="st-refresh-confirm" type="checkbox">
-                    <span>새로고침 전 확인 팝업 표시</span>
-                </label>
-                <div class="st-refresh-settings-action">
-                    <button id="st-refresh-settings-button" class="menu_button" type="button" title="새로고침" aria-label="새로고침">🔄</button>
-                </div>
+                <button type="button" class="rf-reload">
+                    <i class="fa-solid fa-rotate"></i><span>${NAME}</span>
+                </button>
+                ${segBlock('enabled', '확장 활성화',
+                    '끄면 마법봉 메뉴의 새로고침도 사라져요.', '켜기', '끄기')}
+                ${segBlock('confirm', '새로고침 전 확인',
+                    '확장 탭과 마법봉 메뉴에 똑같이 적용돼요.', '표시하기', '표시하지 않기')}
+                ${segBlock('guard', '새로고침 방지',
+                    '자동 새로고침을 최대한 막아요. 직접 누른 새로고침은 그대로 돼요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.',
+                    '켜기', '끄기')}
             </div>
         </div>
-    `;
+    </div>`;
+}
 
-    settingsPanel.appendChild(container);
+function refreshUI() {
+    const s = getSettings();
+    const guardOn = s.enabled && s.guard;
+    const $root = $('.rf-settings');
 
-    const enabledInput = container.querySelector('#st-refresh-enabled');
-    const confirmInput = container.querySelector('#st-refresh-confirm');
-    const refreshButton = container.querySelector('#st-refresh-settings-button');
+    $root.toggleClass('rf-disabled', !s.enabled);
+    $root.find('.rf-reload').prop('disabled', !s.enabled);
+    $root.find('.rf-block').not('[data-key="enabled"]').find('button').prop('disabled', !s.enabled);
 
-    function updateControls() {
-        enabledInput.checked = Boolean(settings.enabled);
-        confirmInput.checked = Boolean(settings.confirmBeforeRefresh);
-        confirmInput.disabled = !settings.enabled;
-        refreshButton.disabled = !settings.enabled;
-        container.classList.toggle('st-refresh-disabled', !settings.enabled);
+    $root.find('.rf-block').each(function () {
+        const value = s[this.dataset.key];
+        $(this).find('.rf-seg button').each(function () {
+            this.setAttribute('aria-checked', String((this.dataset.val === '1') === value));
+        });
+    });
+
+    const label = guardOn ? '새로고침 방지 켜짐' : '새로고침 방지 꺼짐';
+    $root.find('.rf-status')
+        .toggleClass('rf-on', guardOn)
+        .toggleClass('rf-off', !guardOn)
+        .attr({ title: label, 'aria-label': label });
+
+    $('#rf_wand_container').toggle(s.enabled);
+    applyGuard();
+}
+
+jQuery(() => {
+    getSettings();
+
+    const host = document.getElementById('extensions_settings2')
+        || document.getElementById('extensions_settings');
+    if (host) host.insertAdjacentHTML('beforeend', buildSettingsHtml());
+
+    const menu = document.getElementById('extensionsMenu');
+    if (menu) {
+        menu.insertAdjacentHTML('beforeend', `
+            <div id="rf_wand_container" class="extension_container interactable" tabindex="0">
+                <div id="rf_wand_btn" class="list-group-item flex-container flexGap5 interactable" tabindex="0" role="listitem">
+                    <div class="fa-solid fa-rotate extensionsMenuExtensionButton"></div>
+                    <span>${NAME}</span>
+                </div>
+            </div>`);
+        $('#rf_wand_btn').on('click', requestReload);
     }
 
-    enabledInput.addEventListener('change', () => {
-        settings.enabled = enabledInput.checked;
-        updateControls();
-        updateWandMenuItem();
-        saveSettings();
+    const $root = $('.rf-settings');
+    $root.on('click', '.rf-reload', requestReload);
+    $root.on('click', '.rf-seg button', function () {
+        const key = $(this).closest('.rf-block').data('key');
+        getSettings()[key] = this.dataset.val === '1';
+        saveSettingsDebounced();
+        refreshUI();
     });
 
-    confirmInput.addEventListener('change', () => {
-        settings.confirmBeforeRefresh = confirmInput.checked;
-        saveSettings();
-    });
-
-    refreshButton.addEventListener('click', requestRefresh);
-    updateControls();
-    return true;
-}
-
-function updateWandMenuItem() {
-    const existing = document.getElementById(MENU_ITEM_ID);
-    if (!settings?.enabled) {
-        existing?.remove();
-        return Boolean(existing);
-    }
-
-    const menu = findWandMenu();
-    if (!menu) return false;
-
-    // If SillyTavern recreates its menu, recreate this item in the new container.
-    if (existing && existing.parentElement === menu) return true;
-    existing?.remove();
-
-    const item = document.createElement('button');
-    item.id = MENU_ITEM_ID;
-    item.type = 'button';
-    item.className = 'list-group-item flex-container flexGap5 st-refresh-wand-item';
-    item.textContent = '🔄 새로고침';
-    item.addEventListener('click', requestRefresh);
-    menu.appendChild(item);
-    observeMenuContainer(menu);
-    return true;
-}
-
-function observeMenuContainer(menu) {
-    if (!menu?.parentElement || menuObserver?.target === menu.parentElement) return;
-    menuObserver?.disconnect();
-    menuObserver = new MutationObserver(() => {
-        // Re-add the item if SillyTavern rebuilds the Extensions menu.
-        if (settings?.enabled && !document.getElementById(MENU_ITEM_ID)) {
-            updateWandMenuItem();
-        }
-    });
-    menuObserver.target = menu.parentElement;
-    menuObserver.observe(menu.parentElement, { childList: true });
-}
-
-function queueUiSync() {
-    if (syncQueued) return;
-    syncQueued = true;
-    requestAnimationFrame(() => {
-        syncQueued = false;
-        renderSettings();
-        updateWandMenuItem();
-    });
-}
-
-function observeUi() {
-    if (uiObserver) uiObserver.disconnect();
-
-    // SillyTavern can build/rebuild its settings and Extensions menu after the
-    // extension script loads. Observe only until both UI elements are mounted.
-    uiObserver = new MutationObserver(() => {
-        queueUiSync();
-        const settingsReady = Boolean(document.getElementById(SETTINGS_ID));
-        const menuReady = Boolean(document.getElementById(MENU_ITEM_ID));
-        if (settingsReady && menuReady) {
-            uiObserver.disconnect();
-            uiObserver = null;
-        }
-    });
-
-    uiObserver.observe(document.body, { childList: true, subtree: true });
-    queueUiSync();
-}
-
-function initialize() {
-    loadSettings();
-    observeUi();
-    document.addEventListener('keydown', handleDialogKeydown);
-    console.log(`[${EXTENSION_NAME}] 확장이 준비되었습니다.`);
-}
-
-jQuery(initialize);
+    refreshUI();
+    notifyIfReloaded();
+});
