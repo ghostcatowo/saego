@@ -1,3 +1,18 @@
+/**
+ * 새로고침 (refresh_button)
+ * 코드 버전: v1.2.0
+ *
+ * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
+ *   - manifest.json 의 "version" 과 style.css 맨 위 버전도 같은 숫자로 같이 올리기
+ *   - 작은 수정(버그, 문구, 디자인): 1.2.0 → 1.2.1
+ *   - 기능 추가/변경:               1.2.0 → 1.3.0
+ *
+ * 변경 기록
+ *   v1.2.0  팝업 디자인 개선(둥근 모서리, 응/아니 색), '새로고침 전 확인' → '새로고침 팝업'(켜기/끄기)
+ *   v1.1.0  실리태번 기본 팝업 사용, 팝업 위치/탭 닫힘 문제 수정
+ *   v1.0.0  첫 버전
+ */
+
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
@@ -68,6 +83,7 @@ async function askConfirm() {
 function tidyNativePopup(popup, POPUP_RESULT) {
     try {
         const { okButton, cancelButton, closeButton, dlg, body } = popup;
+        dlg?.classList.add('rf-popup');
         if (cancelButton) cancelButton.style.order = '0';
         if (okButton) okButton.style.order = '1';
         if (closeButton) closeButton.style.display = 'none';
@@ -243,8 +259,8 @@ function buildSettingsHtml() {
                 </button>
                 ${segBlock('enabled', '확장 활성화',
                     '끄면 마법봉 메뉴의 새로고침도 사라져요.', '켜기', '끄기')}
-                ${segBlock('confirm', '새로고침 전 확인',
-                    '확장 탭과 마법봉 메뉴에 똑같이 적용돼요.', '표시하기', '표시하지 않기')}
+                ${segBlock('confirm', '새로고침 팝업',
+                    '켜면 새로고침 전에 한 번 물어봐요. 마법봉 메뉴에도 똑같이 적용돼요.', '켜기', '끄기')}
                 ${segBlock('guard', '새로고침 방지',
                     '자동 새로고침을 최대한 막아요. 직접 누른 새로고침은 그대로 돼요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.',
                     '켜기', '끄기')}

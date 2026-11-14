@@ -1,9 +1,20 @@
-/* 새로고침 확장
+/* 새로고침 (refresh_button) — CSS 버전: v1.2.0
+ * ★ 코드를 고칠 때마다 이 버전을 올릴 것! (index.js, manifest.json 의 버전과 같은 숫자로)
+ *
  * 주의: .inline-drawer-content 의 display는 건드리지 않는다. (접기/펼치기는 SillyTavern이 제어)
  */
 
+/* ===== 색 설정 (여기만 바꾸면 응/아니 버튼 색이 바뀜) ===== */
+:root {
+    --rf-yes-bg: #5b8def;                 /* '응' 버튼 배경 */
+    --rf-yes-text: #ffffff;               /* '응' 버튼 글자 */
+    --rf-no-bg: rgba(127, 127, 127, 0.22); /* '아니' 버튼 배경 */
+    --rf-no-text: var(--SmartThemeBodyColor, #222); /* '아니' 버튼 글자 */
+}
+
 .rf-settings,
-.rf-overlay {
+.rf-overlay,
+.rf-popup {
     --rf-accent: var(--SmartThemeQuoteColor, #6aa8ff);
     --rf-line: var(--SmartThemeBorderColor, rgba(127, 127, 127, 0.4));
     --rf-fill: rgba(127, 127, 127, 0.1);
@@ -12,7 +23,8 @@
 
 @supports (background: color-mix(in srgb, red 10%, transparent)) {
     .rf-settings,
-    .rf-overlay {
+    .rf-overlay,
+    .rf-popup {
         --rf-fill-strong: color-mix(in srgb, var(--rf-accent) 24%, transparent);
     }
 }
@@ -208,13 +220,15 @@
 .rf-overlay .rf-dialog-actions button:active { transform: scale(0.97); }
 
 .rf-overlay .rf-btn-no {
-    border: 1px solid var(--rf-line);
-    background: var(--rf-fill);
+    border: 0;
+    background: var(--rf-no-bg);
+    color: var(--rf-no-text);
 }
 
 .rf-overlay .rf-btn-yes {
-    border: 1px solid var(--rf-accent);
-    background: var(--rf-fill-strong);
+    border: 0;
+    background: var(--rf-yes-bg);
+    color: var(--rf-yes-text);
 }
 
 @keyframes rf-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -233,10 +247,74 @@ html.rf-guard body {
     .rf-settings .rf-status { transition: none; }
 }
 
-/* 기본 팝업 안의 문구 */
+
+/* ---------------- 실리태번 기본 팝업을 예쁘게 ---------------- */
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) {
+    width: min(340px, calc(100vw - 40px)) !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    border: 1px solid var(--rf-line) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.4) !important;
+    overflow: hidden;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-body {
+    padding: 26px 18px 18px !important;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-close {
+    display: none !important;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-controls {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-ok,
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-cancel {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 100% !important;
+    min-height: 48px;
+    margin: 0 !important;
+    padding: 0 12px !important;
+    box-sizing: border-box;
+    border: 0 !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    font-size: 1.05em;
+    font-weight: 700;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.1s, filter 0.15s;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-cancel {
+    background: var(--rf-no-bg) !important;
+    color: var(--rf-no-text) !important;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-ok {
+    background: var(--rf-yes-bg) !important;
+    color: var(--rf-yes-text) !important;
+}
+
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-ok:active,
+:is(dialog.popup.rf-popup, dialog.popup:has(.rf-native-text)) .popup-button-cancel:active {
+    transform: scale(0.97);
+    filter: brightness(0.92);
+}
+
 .rf-native-text {
-    padding: 8px 0 4px;
+    padding: 4px 0 22px;
     text-align: center;
-    font-size: 1.1em;
-    font-weight: 600;
+    font-size: 1.15em;
+    font-weight: 700;
 }
