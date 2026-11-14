@@ -1,0 +1,10 @@
+{
+  "display_name": "🔄 새로고침",
+  "loading_order": 10,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Your GitHub username",
+  "version": "1.0.1",
+  "homePage": "",
+  "auto_update": true
+}
