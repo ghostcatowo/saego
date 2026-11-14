@@ -38,7 +38,54 @@ async function requestReload() {
 
 /* ---------------- 확인 팝업 ---------------- */
 
-function askConfirm() {
+// 실리태번 기본 팝업을 써서 위치/닫힘 문제를 피함. 안 되면 아래 직접 만든 팝업으로 대체
+async function askConfirm() {
+    try {
+        const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = await import('../../../popup.js');
+        popupOpen = true;
+        try {
+            const result = await callGenericPopup(
+                '<div class="rf-native-text">새로고침 할래?</div>',
+                POPUP_TYPE.CONFIRM,
+                '',
+                {
+                    okButton: '응',
+                    cancelButton: '아니',
+                    onOpen: (popup) => tidyNativePopup(popup, POPUP_RESULT),
+                },
+            );
+            return result === POPUP_RESULT.AFFIRMATIVE;
+        } finally {
+            popupOpen = false;
+        }
+    } catch (err) {
+        console.warn(`[${NAME}] 기본 팝업을 못 써서 대체 팝업을 사용해요`, err);
+        return askConfirmFallback();
+    }
+}
+
+// 왼쪽 '아니' / 오른쪽 '응', X 버튼 숨김, 바깥 클릭으로 취소
+function tidyNativePopup(popup, POPUP_RESULT) {
+    try {
+        const { okButton, cancelButton, closeButton, dlg, body } = popup;
+        if (cancelButton) cancelButton.style.order = '0';
+        if (okButton) okButton.style.order = '1';
+        if (closeButton) closeButton.style.display = 'none';
+        dlg?.addEventListener('click', (e) => {
+            if (e.target !== dlg) return;
+            const r = (body || dlg).getBoundingClientRect();
+            const inside = e.clientX >= r.left && e.clientX <= r.right
+                && e.clientY >= r.top && e.clientY <= r.bottom;
+            if (inside) return;
+            try {
+                if (typeof popup.completeCancelled === 'function') popup.completeCancelled();
+                else if (typeof popup.complete === 'function') popup.complete(POPUP_RESULT.CANCELLED);
+            } catch { /* 무시 */ }
+        });
+    } catch { /* 무시 */ }
+}
+
+function askConfirmFallback() {
     return new Promise((resolve) => {
         popupOpen = true;
         const prevFocus = document.activeElement;

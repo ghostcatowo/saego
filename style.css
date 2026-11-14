@@ -232,3 +232,11 @@ html.rf-guard body {
     .rf-settings .rf-reload i,
     .rf-settings .rf-status { transition: none; }
 }
+
+/* 기본 팝업 안의 문구 */
+.rf-native-text {
+    padding: 8px 0 4px;
+    text-align: center;
+    font-size: 1.1em;
+    font-weight: 600;
+}
