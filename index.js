@@ -58,7 +58,20 @@ function askConfirm() {
         const btnNo = overlay.querySelector('.rf-btn-no');
         const btnYes = overlay.querySelector('.rf-btn-yes');
 
+        // 화면 크기가 꼬여도(주소창, 확대, 키보드) 지금 보이는 영역 가운데에 뜨도록 맞춤
+        const vv = window.visualViewport;
+        const fit = () => {
+            if (!vv) return;
+            overlay.style.inset = 'auto';
+            overlay.style.left = `${vv.offsetLeft}px`;
+            overlay.style.top = `${vv.offsetTop}px`;
+            overlay.style.width = `${vv.width}px`;
+            overlay.style.height = `${vv.height}px`;
+        };
+
         const close = (result) => {
+            vv?.removeEventListener('resize', fit);
+            vv?.removeEventListener('scroll', fit);
             document.removeEventListener('keydown', onKey, true);
             overlay.remove();
             popupOpen = false;
@@ -87,7 +100,15 @@ function askConfirm() {
         btnYes.addEventListener('click', () => close(true));
         document.addEventListener('keydown', onKey, true);
 
+        // 팝업 안의 터치/클릭을 실리태번이 "바깥 클릭"으로 받아 확장 탭을 닫지 않게 막음
+        for (const type of ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend']) {
+            overlay.addEventListener(type, (e) => e.stopPropagation());
+        }
+
         document.body.appendChild(overlay);
+        fit();
+        vv?.addEventListener('resize', fit);
+        vv?.addEventListener('scroll', fit);
         btnNo.focus();
     });
 }
