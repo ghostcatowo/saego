@@ -1,15 +1,18 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.3.0
+ * 코드 버전: v1.4.1
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - manifest.json 의 "version" 과 style.css 맨 위 버전도 같은 숫자로 같이 올리기
- *   - 작은 수정(버그, 문구, 디자인): 1.3.0 → 1.3.1
- *   - 기능 추가/변경:               1.3.0 → 1.4.0
+ *   - 작은 수정(버그, 문구, 디자인): 1.4.1 → 1.4.2
+ *   - 기능 추가/변경:               1.4.1 → 1.5.0
  *
  * 변경 기록
- *   v1.3.0  새로고침 방지 강화(스크립트가 일으키는 새로고침을 Navigation API로 차단 + 알림), 버튼 크기 축소, 초록/빨강 색
- *   v1.2.0  팝업 디자인 개선(둥근 모서리, 응/아니 색), '새로고침 전 확인' → '새로고침 팝업'(켜기/끄기)
+ *   v1.4.1  토스트 문구 변경(새로고침 방어 성공 🫶 / 실패 🫠)
+ *   v1.4.0  설정/기록 탭 추가(방어 성공·실패 기록), 새로고침 기능과 방지 기능을 따로 켜고 끄기,
+ *           노란 표시등(방지만 켜짐), '새로고침 활성화'로 이름 변경, 예비 팝업 코드 삭제
+ *   v1.3.0  새로고침 방지 강화(Navigation API로 차단 + 알림), 버튼 크기 축소, 초록/빨강 색
+ *   v1.2.0  팝업 디자인 개선, '새로고침 팝업'(켜기/끄기)
  *   v1.1.0  실리태번 기본 팝업 사용, 팝업 위치/탭 닫힘 문제 수정
  *   v1.0.0  첫 버전
  */
@@ -20,11 +23,15 @@ import { saveSettingsDebounced } from '../../../../script.js';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';
+const LOG_MAX = 100;
 const DEFAULTS = { enabled: true, confirm: true, guard: true };
 
 let popupOpen = false;
 let manualReload = false;
 let lockAbort = null;
+let guardNoted = false;      // 이번 페이지에서 방지 시작 기록을 남겼는지
+let activeTab = 'settings';
+let lastBlockedToast = 0;
 
 /* ---------------- 설정 ---------------- */
 
@@ -34,7 +41,71 @@ function getSettings() {
     for (const key of Object.keys(DEFAULTS)) {
         if (typeof s[key] !== 'boolean') s[key] = DEFAULTS[key];
     }
+    if (!Array.isArray(s.log)) s.log = [];
     return s;
+}
+
+/* ---------------- 기록 ---------------- */
+
+const pad = (n) => String(n).padStart(2, '0');
+
+function fmtTime(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// type: 'ok'(방어 성공) | 'fail'(방어 실패) | 'info'(참고)
+function addLog(type, text) {
+    const s = getSettings();
+    const now = Date.now();
+    const top = s.log[0];
+    if (top && top.type === type && top.text === text && now - top.t < 5000) {
+        top.n = (top.n || 1) + 1; // 같은 일이 연달아 생기면 ×N 으로 묶기
+        top.t = now;
+    } else {
+        s.log.unshift({ t: now, type, text, n: 1 });
+        if (s.log.length > LOG_MAX) s.log.length = LOG_MAX;
+    }
+    saveSettingsDebounced();
+    renderLog();
+}
+
+function renderLog() {
+    const s = getSettings();
+    const badge = document.querySelector('.rf-settings .rf-badge');
+    if (badge) badge.textContent = String(s.log.length);
+
+    const list = document.querySelector('.rf-settings .rf-log-list');
+    if (!list) return;
+    list.textContent = '';
+
+    if (!s.log.length) {
+        const empty = document.createElement('div');
+        empty.className = 'rf-log-empty';
+        empty.textContent = '아직 기록이 없어요.';
+        list.appendChild(empty);
+        return;
+    }
+
+    const tags = { ok: '방어 성공', fail: '방어 실패', info: '참고' };
+    for (const item of s.log) {
+        const row = document.createElement('div');
+        row.className = `rf-log-item rf-log-${item.type}`;
+
+        const time = document.createElement('div');
+        time.className = 'rf-log-time';
+        time.textContent = fmtTime(item.t);
+
+        const text = document.createElement('div');
+        text.className = 'rf-log-text';
+        const tag = document.createElement('span');
+        tag.className = 'rf-log-tag';
+        tag.textContent = tags[item.type] || '참고';
+        text.append(tag, ` ${item.text}${item.n > 1 ? ` (×${item.n})` : ''}`);
+
+        row.append(time, text);
+        list.appendChild(row);
+    }
 }
 
 /* ---------------- 새로고침 ---------------- */
@@ -52,9 +123,8 @@ async function requestReload() {
     doReload();
 }
 
-/* ---------------- 확인 팝업 ---------------- */
+/* ---------------- 확인 팝업 (실리태번 기본 팝업) ---------------- */
 
-// 실리태번 기본 팝업을 써서 위치/닫힘 문제를 피함. 안 되면 아래 직접 만든 팝업으로 대체
 async function askConfirm() {
     try {
         const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = await import('../../../popup.js');
@@ -75,8 +145,8 @@ async function askConfirm() {
             popupOpen = false;
         }
     } catch (err) {
-        console.warn(`[${NAME}] 기본 팝업을 못 써서 대체 팝업을 사용해요`, err);
-        return askConfirmFallback();
+        console.warn(`[${NAME}] 기본 팝업을 못 써서 브라우저 확인창을 사용해요`, err);
+        return window.confirm('새로고침 할래?');
     }
 }
 
@@ -102,81 +172,6 @@ function tidyNativePopup(popup, POPUP_RESULT) {
     } catch { /* 무시 */ }
 }
 
-function askConfirmFallback() {
-    return new Promise((resolve) => {
-        popupOpen = true;
-        const prevFocus = document.activeElement;
-        const openedAt = Date.now();
-
-        const overlay = document.createElement('div');
-        overlay.className = 'rf-overlay';
-        overlay.innerHTML = `
-            <div class="rf-dialog" role="alertdialog" aria-modal="true" aria-labelledby="rf-dialog-text">
-                <p class="rf-dialog-text" id="rf-dialog-text">새로고침 할래?</p>
-                <div class="rf-dialog-actions">
-                    <button type="button" class="rf-btn-no">아니</button>
-                    <button type="button" class="rf-btn-yes">응</button>
-                </div>
-            </div>`;
-
-        const btnNo = overlay.querySelector('.rf-btn-no');
-        const btnYes = overlay.querySelector('.rf-btn-yes');
-
-        // 화면 크기가 꼬여도(주소창, 확대, 키보드) 지금 보이는 영역 가운데에 뜨도록 맞춤
-        const vv = window.visualViewport;
-        const fit = () => {
-            if (!vv) return;
-            overlay.style.inset = 'auto';
-            overlay.style.left = `${vv.offsetLeft}px`;
-            overlay.style.top = `${vv.offsetTop}px`;
-            overlay.style.width = `${vv.width}px`;
-            overlay.style.height = `${vv.height}px`;
-        };
-
-        const close = (result) => {
-            vv?.removeEventListener('resize', fit);
-            vv?.removeEventListener('scroll', fit);
-            document.removeEventListener('keydown', onKey, true);
-            overlay.remove();
-            popupOpen = false;
-            try { prevFocus?.focus?.(); } catch { /* 무시 */ }
-            resolve(result);
-        };
-
-        function onKey(e) {
-            if (e.key === 'Escape' || e.key === 'Esc') {
-                e.preventDefault();
-                e.stopPropagation();
-                close(false);
-            } else if (e.key === 'Tab') {
-                const active = document.activeElement;
-                if (e.shiftKey && active === btnNo) { e.preventDefault(); btnYes.focus(); }
-                else if (!e.shiftKey && active === btnYes) { e.preventDefault(); btnNo.focus(); }
-                else if (active !== btnNo && active !== btnYes) { e.preventDefault(); btnNo.focus(); }
-            }
-        }
-
-        // 팝업을 연 터치가 바로 바깥 클릭으로 처리되는 것을 막기 위해 잠깐 무시
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay && Date.now() - openedAt > 250) close(false);
-        });
-        btnNo.addEventListener('click', () => close(false));
-        btnYes.addEventListener('click', () => close(true));
-        document.addEventListener('keydown', onKey, true);
-
-        // 팝업 안의 터치/클릭을 실리태번이 "바깥 클릭"으로 받아 확장 탭을 닫지 않게 막음
-        for (const type of ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend']) {
-            overlay.addEventListener(type, (e) => e.stopPropagation());
-        }
-
-        document.body.appendChild(overlay);
-        fit();
-        vv?.addEventListener('resize', fit);
-        vv?.addEventListener('scroll', fit);
-        btnNo.focus();
-    });
-}
-
 /* ---------------- 새로고침 방지 ---------------- */
 
 // (예비) Navigation API가 없는 브라우저에서만 사용: 새로고침 전에 브라우저 확인창
@@ -187,24 +182,32 @@ function onBeforeUnload(e) {
     return '';
 }
 
-let lastBlockedToast = 0;
 function notifyBlocked() {
     const now = Date.now();
     if (now - lastBlockedToast < 4000) return;
     lastBlockedToast = now;
     if (typeof toastr !== 'undefined') {
-        toastr.warning('자동 새로고침을 막았어요. 필요하면 새로고침 버튼을 눌러주세요.', NAME);
+        toastr.success('새로고침 방어 성공 🫶', NAME);
     }
 }
 
 // 페이지/확장이 스스로 일으키는 새로고침(location.reload 등)을 취소.
-// 사용자가 브라우저 자체로 하는 새로고침(F5, 당겨서 새로고침)은 userInitiated라서 건드리지 않음.
+// 사용자가 브라우저로 직접 하는 새로고침(F5, 당겨서 새로고침)은 userInitiated라서 건드리지 않음.
 function onNavigate(e) {
-    if (manualReload || e.userInitiated || !e.cancelable) return;
+    if (manualReload) return;
     const isReload = e.navigationType === 'reload';
     const isSameUrl = !e.destination?.sameDocument && e.destination?.url === location.href;
     if (!isReload && !isSameUrl) return;
+    if (e.userInitiated) return;
+
+    if (!e.cancelable) {
+        addLog('fail', '새로고침이 일어났는데 취소할 수 없는 종류라서 막지 못했어요.');
+        return;
+    }
     e.preventDefault();
+    addLog('ok', isReload
+        ? '페이지가 스스로 일으킨 새로고침을 취소했어요.'
+        : '같은 주소로 다시 이동하는 것을 취소했어요.');
     notifyBlocked();
 }
 
@@ -224,48 +227,67 @@ function releaseLock() {
     lockAbort = null;
 }
 
+// 방지 기능은 '새로고침 활성화'와 상관없이 자기 설정(guard)만 따름
 function applyGuard() {
-    const s = getSettings();
-    const on = s.enabled && s.guard;
+    const on = getSettings().guard;
     const nav = window.navigation;
     document.documentElement.classList.toggle('rf-guard', on);
     window.removeEventListener('beforeunload', onBeforeUnload);
     nav?.removeEventListener('navigate', onNavigate);
-    if (on) {
-        if (nav) nav.addEventListener('navigate', onNavigate);
-        else window.addEventListener('beforeunload', onBeforeUnload);
-        acquireLock();
-    } else {
+
+    if (!on) {
         releaseLock();
+        return;
+    }
+    if (nav) nav.addEventListener('navigate', onNavigate);
+    else window.addEventListener('beforeunload', onBeforeUnload);
+    acquireLock();
+
+    if (!guardNoted) {
+        guardNoted = true;
+        addLog('info', '새로고침 방지를 시작했어요.');
+        if (!nav) addLog('fail', '이 브라우저는 자동 새로고침 취소를 지원하지 않아서 확인창 방식으로 대신해요. (모바일에선 안 뜰 수 있어요)');
+        if (!navigator.locks) addLog('fail', '탭 정리를 줄이는 기능(Web Lock)을 쓸 수 없어요. https 주소가 아니거나 브라우저가 지원하지 않아요.');
     }
 }
 
-// 직접 누르지 않은 새로고침/재로드로 열렸다면 알려줌
-function notifyIfReloaded() {
-    const s = getSettings();
+// 페이지가 열린 이유를 확인해서 기록
+function checkLoadReason() {
     let wasManual = false;
     try {
         wasManual = sessionStorage.getItem(FLAG) === '1';
         sessionStorage.removeItem(FLAG);
     } catch { /* 무시 */ }
-    if (!s.enabled || !s.guard || wasManual) return;
+
+    if (wasManual) {
+        addLog('info', '새로고침 버튼으로 직접 새로고침했어요.');
+        return;
+    }
+    if (!getSettings().guard) return;
 
     const nav = performance.getEntriesByType?.('navigation')?.[0];
-    if (document.wasDiscarded || nav?.type === 'reload') {
-        if (typeof toastr !== 'undefined') toastr.info('페이지가 다시 불러와졌어요.', NAME);
+    let reason = '';
+    if (document.wasDiscarded) {
+        reason = '브라우저가 메모리를 정리하려고 탭을 닫았다가 다시 불러왔어요. 확장으로는 막을 수 없는 경우예요.';
+    } else if (nav?.type === 'reload') {
+        reason = '브라우저가 페이지를 다시 불러왔어요. (당겨서 새로고침, F5, 앱 복귀 중 재로드 등) 확장이 취소할 수 없는 종류예요.';
     }
+    if (!reason) return;
+
+    addLog('fail', reason);
+    if (typeof toastr !== 'undefined') toastr.warning('새로고침 방어 실패 🫠', NAME);
 }
 
 /* ---------------- UI ---------------- */
 
-function segBlock(key, title, hint, labelOn, labelOff) {
+function segBlock(key, title, hint) {
     return `
         <div class="rf-block" data-key="${key}">
             <div class="rf-title">${title}</div>
             <div class="rf-hint">${hint}</div>
             <div class="rf-seg" role="radiogroup" aria-label="${title}">
-                <button type="button" role="radio" data-val="1">${labelOn}</button>
-                <button type="button" role="radio" data-val="0">${labelOff}</button>
+                <button type="button" role="radio" data-val="1">켜기</button>
+                <button type="button" role="radio" data-val="0">끄기</button>
             </div>
         </div>`;
 }
@@ -280,29 +302,57 @@ function buildSettingsHtml() {
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
-                <button type="button" class="rf-reload">
-                    <i class="fa-solid fa-rotate"></i><span>${NAME}</span>
-                </button>
-                ${segBlock('enabled', '확장 활성화',
-                    '끄면 마법봉 메뉴의 새로고침도 사라져요.', '켜기', '끄기')}
-                ${segBlock('confirm', '새로고침 팝업',
-                    '켜면 새로고침 전에 한 번 물어봐요. 마법봉 메뉴에도 똑같이 적용돼요.', '켜기', '끄기')}
-                ${segBlock('guard', '새로고침 방지',
-                    '자동 새로고침을 최대한 막아요. 직접 누른 새로고침은 그대로 돼요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.',
-                    '켜기', '끄기')}
+                <div class="rf-tabs" role="tablist">
+                    <button type="button" class="rf-tab" role="tab" data-tab="settings">설정</button>
+                    <button type="button" class="rf-tab" role="tab" data-tab="log">기록 <span class="rf-badge">0</span></button>
+                </div>
+
+                <div class="rf-pane" data-pane="settings">
+                    <button type="button" class="rf-reload">
+                        <i class="fa-solid fa-rotate"></i><span>${NAME}</span>
+                    </button>
+                    ${segBlock('enabled', '새로고침 활성화',
+                        '끄면 새로고침 버튼과 마법봉 메뉴 항목이 사라져요. 새로고침 방지는 따로 켜고 꺼요.')}
+                    ${segBlock('confirm', '새로고침 팝업',
+                        '켜면 새로고침 전에 한 번 물어봐요. 마법봉 메뉴에도 똑같이 적용돼요.')}
+                    ${segBlock('guard', '새로고침 방지',
+                        '자동 새로고침을 최대한 막아요. 직접 누른 새로고침은 그대로 돼요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.')}
+                    <div class="rf-legend">
+                        표시등: 초록 = 방지 켜짐 · 노랑 = 방지만 켜짐(새로고침 기능 꺼짐) · 빨강 = 방지 꺼짐
+                    </div>
+                </div>
+
+                <div class="rf-pane" data-pane="log">
+                    <div class="rf-log-toolbar">
+                        <button type="button" class="rf-clear">기록 지우기</button>
+                    </div>
+                    <div class="rf-log-list"></div>
+                </div>
             </div>
         </div>
     </div>`;
 }
 
+function updateTabs() {
+    const $root = $('.rf-settings');
+    $root.find('.rf-tab').each(function () {
+        const active = this.dataset.tab === activeTab;
+        $(this).toggleClass('rf-tab-active', active).attr('aria-selected', String(active));
+    });
+    $root.find('.rf-pane').each(function () {
+        $(this).toggleClass('rf-pane-hidden', this.dataset.pane !== activeTab);
+    });
+}
+
 function refreshUI() {
     const s = getSettings();
-    const guardOn = s.enabled && s.guard;
     const $root = $('.rf-settings');
 
-    $root.toggleClass('rf-disabled', !s.enabled);
+    // 새로고침 기능(버튼/팝업)만 '새로고침 활성화'를 따르고, 방지는 따로 동작
     $root.find('.rf-reload').prop('disabled', !s.enabled);
-    $root.find('.rf-block').not('[data-key="enabled"]').find('button').prop('disabled', !s.enabled);
+    $root.find('.rf-block[data-key="confirm"]')
+        .toggleClass('rf-dim', !s.enabled)
+        .find('button').prop('disabled', !s.enabled);
 
     $root.find('.rf-block').each(function () {
         const value = s[this.dataset.key];
@@ -311,14 +361,22 @@ function refreshUI() {
         });
     });
 
-    const label = guardOn ? '새로고침 방지 켜짐' : '새로고침 방지 꺼짐';
+    // 표시등: 방지 켜짐=초록 / 방지만 켜짐(새로고침 기능 꺼짐)=노랑 / 방지 꺼짐=빨강
+    const state = !s.guard ? 'off' : (s.enabled ? 'on' : 'warn');
+    const labels = {
+        on: '새로고침 방지 켜짐',
+        warn: '새로고침 방지만 켜짐 (새로고침 기능은 꺼짐)',
+        off: '새로고침 방지 꺼짐',
+    };
     $root.find('.rf-status')
-        .toggleClass('rf-on', guardOn)
-        .toggleClass('rf-off', !guardOn)
-        .attr({ title: label, 'aria-label': label });
+        .removeClass('rf-on rf-warn rf-off')
+        .addClass(`rf-${state}`)
+        .attr({ title: labels[state], 'aria-label': labels[state] });
 
     $('#rf_wand_container').toggle(s.enabled);
+    updateTabs();
     applyGuard();
+    renderLog();
 }
 
 jQuery(() => {
@@ -348,7 +406,16 @@ jQuery(() => {
         saveSettingsDebounced();
         refreshUI();
     });
+    $root.on('click', '.rf-tab', function () {
+        activeTab = this.dataset.tab;
+        updateTabs();
+    });
+    $root.on('click', '.rf-clear', () => {
+        getSettings().log = [];
+        saveSettingsDebounced();
+        renderLog();
+    });
 
+    checkLoadReason();
     refreshUI();
-    notifyIfReloaded();
 });
