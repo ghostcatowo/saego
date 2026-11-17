@@ -1,6 +1,6 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.7.2
+ * 코드 버전: v1.9.1
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
@@ -9,10 +9,11 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const VERSION = 'v1.7.2';
+const VERSION = 'v1.9.1';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
+const CODE_FLAG = 'rf_code_reload';   // 코드(실리태번·확장)가 일으킨 새로고침 표시(시각, 호출 위치)
 const USER_FLAG = 'rf_user_reload'; // 당겨서·F5 등 사용자가 브라우저로 한 새로고침(확인됨) 표시(시각)
 const ALIVE = 'rf_page_alive';     // 페이지가 마지막으로 살아 있던 때의 상태(탭 단위로 저장)
 const LOG_MAX = 20;
@@ -21,10 +22,10 @@ const TAGS = { ok: '막음', fail: '실패', warn: '새로고침', error: '오�
 
 let popupOpen = false;
 let manualReload = false;
+let codeReload = false;     // 실리태번·확장이 코드로 일으킨 새로고침이면 잠깐 true (막지 않고 통과)
 let lockAbort = null;
 let lockErrNoted = false;
 let activeTab = 'settings';
-let lastBlockedToast = 0;
 
 // 페이지 상태 추적 (새로고침 원인 분석용)
 let lastHiddenAt = 0;
@@ -178,7 +179,7 @@ function buildLogText(indices) {
         `[새로고침 확장 ${VERSION}] 로그 복사 시각 ${fmtTime(Date.now())}`,
         `기기: ${navigator.userAgent}`,
         `지원: 탐색API ${yn(window.navigation)} / WebLock ${yn(navigator.locks)} / 보안연결 ${yn(window.isSecureContext)} / 설치앱모드 ${yn(standalone)} / 기기메모리 ${navigator.deviceMemory ?? '?'}GB`,
-        `설정: 방지 ${s.guard ? '켜짐' : '꺼짐'} / 새로고침 기능 ${s.enabled ? '켜짐' : '꺼짐'}`,
+        `설정: 방지 ${s.guard ? '켜짐' : '꺼짐'} / 새로고침 기능 ${s.enabled ? '켜짐' : '꺼짐'} / 연결 유지 ${rtcState()}`,
         `현재 화면: ${document.visibilityState} / 이 페이지를 연 시각: ${fmtTime(performance.timeOrigin)}`,
     ];
     const picked = indices ? indices.filter((i) => s.log[i]) : s.log.map((_, i) => i);
@@ -309,26 +310,17 @@ function tidyNativePopup(popup, POPUP_RESULT) {
 }
 
 /* ---------------- 새로고침 방지 ---------------- */
+// v1.2 방식: beforeunload 로 새로고침을 막고(브라우저 확인창), Web Lock 을 쥐고 있음.
+// 단, 새로고침 버튼과 실리태번·확장이 코드로 일으킨 새로고침(확장 켜기/끄기 등)은 막지 않고 통과시킴.
+// onNavigate 가 '코드가 한 것인지' 판별하고(탐색 API), 누가 불렀는지 기록해 둠 (기록 탭용).
 
-// (예비) Navigation API가 없는 브라우저에서만 사용: 새로고침 전에 브라우저 확인창
 function onBeforeUnload(e) {
-    if (manualReload) return;
+    if (manualReload || codeReload) return;
     e.preventDefault();
     e.returnValue = '';
     return '';
 }
 
-function notifyBlocked() {
-    const now = Date.now();
-    if (now - lastBlockedToast < 4000) return;
-    lastBlockedToast = now;
-    if (typeof toastr !== 'undefined') {
-        toastr.success('새로고침 방어 성공 🫶', NAME);
-    }
-}
-
-// 페이지/확장이 스스로 일으키는 새로고침(location.reload 등)을 취소.
-// 사용자가 브라우저로 직접 하는 새로고침(F5, 당겨서 새로고침)은 userInitiated라서 건드리지 않음.
 function onNavigate(e) {
     if (manualReload) return;
     const isReload = e.navigationType === 'reload';
@@ -338,20 +330,12 @@ function onNavigate(e) {
         try { sessionStorage.setItem(USER_FLAG, String(Date.now())); } catch { /* 무시 */ }
         return;
     }
-
-    // 누가 새로고침을 불렀는지 알 수 있게 호출 위치를 남김 (비어 있을 수도 있음)
-    const stack = String(new Error().stack || '').split('\n').slice(2, 9).map((l) => l.trim()).join('\n');
-    const info = `종류: ${e.navigationType} / 취소 가능: ${e.cancelable ? '예' : '아니오'} / 주소 같음: ${isSameUrl ? '예' : '아니오'}\n호출 위치:\n${stack || '(알 수 없음)'}`;
-
-    if (!e.cancelable) {
-        addLog('fail', '코드가 새로고침을 일으켰는데 취소할 수 없는 종류라서 막지 못했어요.', info);
-        return;
-    }
-    e.preventDefault();
-    addLog('ok', isReload
-        ? '코드가 일으킨 새로고침을 취소했어요.'
-        : '같은 주소로 다시 이동하는 것을 취소했어요.', info);
-    notifyBlocked();
+    // 코드가 한 새로고침이라 막지 않고 통과시킴 (beforeunload 확인창이 안 뜨게)
+    codeReload = true;
+    setTimeout(() => { codeReload = false; }, 5000); // 새로고침이 취소돼도 방지가 계속 꺼져 있지 않게
+    // 취소하지 않고, 누가 불렀는지만 남김 (다음에 열릴 때 기록)
+    const caller = String(new Error().stack || '').split('\n').slice(2, 7).map((l) => l.trim()).join('\n');
+    try { sessionStorage.setItem(CODE_FLAG, JSON.stringify({ t: Date.now(), caller })); } catch { /* 무시 */ }
 }
 
 // Web Lock을 쥐고 있으면 브라우저가 탭을 정리할 때 덜 건드리는 경우가 있음 (보장은 아님)
@@ -374,20 +358,25 @@ function releaseLock() {
     lockAbort = null;
 }
 
+// 연결 유지(WebRTC)는 v1.2 방식으로 돌아가며 사용하지 않음. 기록에 '꺼짐'으로만 표시됨.
+function rtcState() {
+    return '꺼짐';
+}
+
 // 방지 기능은 '새로고침 활성화'와 상관없이 자기 설정(guard)만 따름
 function applyGuard() {
     const on = getSettings().guard;
     const nav = window.navigation;
     document.documentElement.classList.toggle('rf-guard', on);
-    window.removeEventListener('beforeunload', onBeforeUnload);
     nav?.removeEventListener('navigate', onNavigate);
+    window.removeEventListener('beforeunload', onBeforeUnload);
 
     if (!on) {
         releaseLock();
         return;
     }
-    if (nav) nav.addEventListener('navigate', onNavigate);
-    else window.addEventListener('beforeunload', onBeforeUnload);
+    nav?.addEventListener('navigate', onNavigate);
+    window.addEventListener('beforeunload', onBeforeUnload);
     acquireLock();
 }
 
@@ -408,6 +397,7 @@ function beat(why) {
             hiddenAt: lastHiddenAt,
             freezeAt: lastFreezeAt,
             unl: unloading,
+            rtc: rtcState(),
         }));
     } catch { /* 무시 */ }
 }
@@ -423,7 +413,12 @@ function startHeartbeat() {
     });
     window.addEventListener('pageshow', () => { unloading = ''; beat('pageshow'); });
     document.addEventListener('freeze', () => { lastFreezeAt = Date.now(); beat('freeze'); });
-    document.addEventListener('resume', () => beat('resume'));
+    document.addEventListener('resume', () => {
+        // 동결됐다가 새로고침 없이 돌아온 경우도 남겨서, 연결 유지가 효과 있는지 확인할 수 있게 함
+        if (lastFreezeAt) addLog('info', `동결됐다가 무사히 돌아왔어요 (약 ${fmtDur(Date.now() - lastFreezeAt)} 동결)`, `연결 유지: ${rtcState()}`);
+        lastFreezeAt = 0;
+        beat('resume');
+    });
     beat('start');
 }
 
@@ -434,11 +429,14 @@ function checkLoadReason() {
     const now = Date.now();
     let manualAt = 0;
     let userAt = 0;
+    let codeInfo = null;
     try {
         manualAt = Number(sessionStorage.getItem(FLAG)) || 0;
         userAt = Number(sessionStorage.getItem(USER_FLAG)) || 0;
+        codeInfo = JSON.parse(sessionStorage.getItem(CODE_FLAG) || 'null');
         sessionStorage.removeItem(FLAG);
         sessionStorage.removeItem(USER_FLAG);
+        sessionStorage.removeItem(CODE_FLAG);
     } catch { /* 무시 */ }
 
     // 15초 안에 한 것만 '직접'으로 인정
@@ -448,6 +446,10 @@ function checkLoadReason() {
     }
     if (userAt && now - userAt < 15000) {
         addLog('warn', '직접 새로고침했어요 (당겨서·F5 등)');
+        return;
+    }
+    if (codeInfo && now - codeInfo.t < 15000) {
+        addLog('info', '코드가 일으킨 새로고침이에요 (실리태번·확장이 필요해서 한 것)', `호출 위치:\n${codeInfo.caller || '(알 수 없음)'}`);
         return;
     }
     if (!getSettings().guard) return;
@@ -463,6 +465,7 @@ function checkLoadReason() {
         lines.push(`이전 페이지 마지막 신호: ${fmtDur(now - prev.t)} 전 (${prev.why}, 화면 ${prev.vis === 'hidden' ? '숨김' : '보임'}${prev.unl ? ', 닫히는 중' : ''})`);
         if (prev.vis === 'hidden' && prev.hiddenAt) lines.push(`화면이 숨겨진 뒤 경과: ${fmtDur(now - prev.hiddenAt)}`);
         if (prev.freezeAt) lines.push(`동결(freeze) 기록: ${fmtDur(now - prev.freezeAt)} 전`);
+        lines.push(`연결 유지: ${prev.rtc || '기록 없음'}`);
     } else {
         lines.push('이전 페이지 신호 없음 (이 탭에서 처음 열렸거나 저장소가 비었어요)');
     }
@@ -520,7 +523,7 @@ function buildSettingsHtml() {
                     ${segBlock('confirm', '새로고침 팝업',
                         '켜면 새로고침 전에 한 번 물어봐요. 마법봉 메뉴에도 똑같이 적용돼요.')}
                     ${segBlock('guard', '새로고침 방지',
-                        '자동 새로고침을 최대한 막아요. 직접 누른 새로고침은 그대로 돼요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.')}
+                        '새로고침 버튼과 실리태번이 하는 새로고침(확장 켜기/끄기 등)은 그대로 돼요. 그 밖의 새로고침(당겨서·F5 등)은 확인창이 떠요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.')}
                     <div class="rf-legend">
                         표시등: 초록 = 방지 켜짐 · 노랑 = 방지만 켜짐(새로고침 기능 꺼짐) · 빨강 = 방지 꺼짐
                     </div>
