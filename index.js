@@ -1,37 +1,34 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.4.1
+ * 코드 버전: v1.6.0
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
- *   - manifest.json 의 "version" 과 style.css 맨 위 버전도 같은 숫자로 같이 올리기
- *   - 작은 수정(버그, 문구, 디자인): 1.4.1 → 1.4.2
- *   - 기능 추가/변경:               1.4.1 → 1.5.0
- *
- * 변경 기록
- *   v1.4.1  토스트 문구 변경(새로고침 방어 성공 🫶 / 실패 🫠)
- *   v1.4.0  설정/기록 탭 추가(방어 성공·실패 기록), 새로고침 기능과 방지 기능을 따로 켜고 끄기,
- *           노란 표시등(방지만 켜짐), '새로고침 활성화'로 이름 변경, 예비 팝업 코드 삭제
- *   v1.3.0  새로고침 방지 강화(Navigation API로 차단 + 알림), 버튼 크기 축소, 초록/빨강 색
- *   v1.2.0  팝업 디자인 개선, '새로고침 팝업'(켜기/끄기)
- *   v1.1.0  실리태번 기본 팝업 사용, 팝업 위치/탭 닫힘 문제 수정
- *   v1.0.0  첫 버전
+ *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
  */
 
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
+const VERSION = 'v1.6.0';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
-const FLAG = 'rf_manual_reload';
-const LOG_MAX = 100;
+const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
+const ALIVE = 'rf_page_alive';     // 페이지가 마지막으로 살아 있던 때의 상태(탭 단위로 저장)
+const LOG_MAX = 20;
 const DEFAULTS = { enabled: true, confirm: true, guard: true };
+const TAGS = { ok: '막음', fail: '실패', error: '오류', info: '참고' };
 
 let popupOpen = false;
 let manualReload = false;
 let lockAbort = null;
-let guardNoted = false;      // 이번 페이지에서 방지 시작 기록을 남겼는지
+let lockErrNoted = false;
 let activeTab = 'settings';
 let lastBlockedToast = 0;
+
+// 페이지 상태 추적 (새로고침 원인 분석용)
+let lastHiddenAt = 0;
+let lastFreezeAt = 0;
+let unloading = '';          // '' | 'pagehide' | 'bfcache'
 
 /* ---------------- 설정 ---------------- */
 
@@ -41,33 +38,72 @@ function getSettings() {
     for (const key of Object.keys(DEFAULTS)) {
         if (typeof s[key] !== 'boolean') s[key] = DEFAULTS[key];
     }
+    if ('keepAlive' in s) delete s.keepAlive; // 삭제된 기능의 옛 설정 정리
     if (!Array.isArray(s.log)) s.log = [];
+    if (s.log.length > LOG_MAX) s.log.length = LOG_MAX;
     return s;
 }
 
-/* ---------------- 기록 ---------------- */
+/* ---------------- 로그 ---------------- */
+// 새로고침이 안 막혔을 때, 또는 오류가 났을 때 원인을 확인하려고 남기는 기록이에요.
+// 'ok' 막음 / 'fail' 실패 / 'error' 오류 / 'info' 참고
 
 const pad = (n) => String(n).padStart(2, '0');
+const clip = (str, n) => (str.length > n ? `${str.slice(0, n)}…` : str);
+const scrub = (str) => String(str).split(location.origin).join(''); // 접속 주소(IP·도메인)는 기록에서 뺌
 
 function fmtTime(ts) {
     const d = new Date(ts);
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// type: 'ok'(방어 성공) | 'fail'(방어 실패) | 'info'(참고)
-function addLog(type, text) {
+function fmtDur(ms) {
+    const sec = Math.max(0, Math.round(ms / 1000));
+    if (sec < 60) return `${sec}초`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}분 ${sec % 60}초`;
+    return `${Math.floor(min / 60)}시간 ${min % 60}분`;
+}
+
+function addLog(type, text, detail = '') {
     const s = getSettings();
     const now = Date.now();
+    text = scrub(text);
+    const d = clip(scrub(detail || ''), 900);
     const top = s.log[0];
-    if (top && top.type === type && top.text === text && now - top.t < 5000) {
+    if (top && top.type === type && top.text === text && (top.detail || '') === d && now - top.t < 5000) {
         top.n = (top.n || 1) + 1; // 같은 일이 연달아 생기면 ×N 으로 묶기
         top.t = now;
     } else {
-        s.log.unshift({ t: now, type, text, n: 1 });
+        s.log.unshift({ t: now, type, text, detail: d, n: 1 });
         if (s.log.length > LOG_MAX) s.log.length = LOG_MAX;
     }
     saveSettingsDebounced();
     renderLog();
+}
+
+function logErr(label, err) {
+    const stack = String(err?.stack || '').split('\n').slice(0, 6).join('\n');
+    addLog('error', `${label}: ${err?.message || err}`, stack);
+}
+
+// 이 확장에서 난 오류만 기록 (다른 확장의 오류까지 쌓이지 않게)
+function captureOwnErrors() {
+    window.addEventListener('error', (e) => {
+        try {
+            const stack = String(e.error?.stack || '');
+            if (!String(e.filename || '').includes(MODULE) && !stack.includes(MODULE)) return;
+            addLog('error', `오류: ${e.message}`, `${e.filename}:${e.lineno}:${e.colno}\n${stack.split('\n').slice(0, 6).join('\n')}`);
+        } catch { /* 무시 */ }
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+        try {
+            const r = e.reason;
+            const stack = String(r?.stack || '');
+            if (!stack.includes(MODULE)) return;
+            addLog('error', `처리 안 된 오류: ${r?.message || r}`, stack.split('\n').slice(0, 6).join('\n'));
+        } catch { /* 무시 */ }
+    });
 }
 
 function renderLog() {
@@ -87,7 +123,6 @@ function renderLog() {
         return;
     }
 
-    const tags = { ok: '방어 성공', fail: '방어 실패', info: '참고' };
     for (const item of s.log) {
         const row = document.createElement('div');
         row.className = `rf-log-item rf-log-${item.type}`;
@@ -100,19 +135,90 @@ function renderLog() {
         text.className = 'rf-log-text';
         const tag = document.createElement('span');
         tag.className = 'rf-log-tag';
-        tag.textContent = tags[item.type] || '참고';
+        tag.textContent = TAGS[item.type] || '참고';
         text.append(tag, ` ${item.text}${item.n > 1 ? ` (×${item.n})` : ''}`);
 
         row.append(time, text);
+        if (item.detail) {
+            const detail = document.createElement('div');
+            detail.className = 'rf-log-detail';
+            detail.textContent = item.detail;
+            row.append(detail);
+        }
         list.appendChild(row);
     }
+}
+
+/* ---------------- 로그 복사 ---------------- */
+
+function buildLogText() {
+    const s = getSettings();
+    const standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || navigator.standalone === true;
+    const yn = (v) => (v ? 'O' : 'X');
+    const head = [
+        `[새로고침 확장 ${VERSION}] 로그 복사 시각 ${fmtTime(Date.now())}`,
+        `기기: ${navigator.userAgent}`,
+        `지원: 탐색API ${yn(window.navigation)} / WebLock ${yn(navigator.locks)} / 보안연결 ${yn(window.isSecureContext)} / 설치앱모드 ${yn(standalone)} / 기기메모리 ${navigator.deviceMemory ?? '?'}GB`,
+        `설정: 방지 ${s.guard ? '켜짐' : '꺼짐'} / 새로고침 기능 ${s.enabled ? '켜짐' : '꺼짐'}`,
+        `현재 화면: ${document.visibilityState} / 이 페이지를 연 시각: ${fmtTime(performance.timeOrigin)}`,
+    ];
+    const body = s.log.length
+        ? s.log.map((x, i) => {
+            const lines = [`${i + 1}. ${fmtTime(x.t)} [${TAGS[x.type] || '참고'}] ${x.text}${x.n > 1 ? ` (×${x.n})` : ''}`];
+            if (x.detail) lines.push(...x.detail.split('\n').map((l) => `   ${l}`));
+            return lines.join('\n');
+        }).join('\n\n')
+        : '(기록 없음)';
+    return `${head.join('\n')}\n\n기록 ${s.log.length}개 (위가 최신)\n\n${body}`;
+}
+
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { /* 무시 */ }
+    ta.remove();
+    return ok;
+}
+
+async function copyLog() {
+    const text = buildLogText();
+    const raw = document.querySelector('.rf-settings .rf-log-raw');
+    raw?.classList.remove('rf-show');
+
+    let ok = false;
+    try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+    } catch {
+        ok = fallbackCopy(text);
+    }
+
+    if (ok) {
+        if (typeof toastr !== 'undefined') toastr.success('로그를 복사했어요', NAME);
+        return;
+    }
+    // 복사가 막힌 환경이면 글을 보여주고 직접 복사하게 함
+    if (raw) {
+        raw.value = text;
+        raw.classList.add('rf-show');
+        raw.focus();
+        raw.select();
+    }
+    if (typeof toastr !== 'undefined') toastr.error('복사가 막혀 있어요. 아래 칸의 글을 직접 복사해 주세요.', NAME);
 }
 
 /* ---------------- 새로고침 ---------------- */
 
 function doReload() {
     manualReload = true;
-    try { sessionStorage.setItem(FLAG, '1'); } catch { /* 무시 */ }
+    setTimeout(() => { manualReload = false; }, 5000); // 새로고침이 취소돼도 방지가 계속 꺼져 있지 않게
+    try { sessionStorage.setItem(FLAG, String(Date.now())); } catch { /* 무시 */ }
     location.reload();
 }
 
@@ -146,6 +252,7 @@ async function askConfirm() {
         }
     } catch (err) {
         console.warn(`[${NAME}] 기본 팝업을 못 써서 브라우저 확인창을 사용해요`, err);
+        logErr('기본 팝업을 못 써서 브라우저 확인창으로 대신했어요', err);
         return window.confirm('새로고침 할래?');
     }
 }
@@ -200,14 +307,18 @@ function onNavigate(e) {
     if (!isReload && !isSameUrl) return;
     if (e.userInitiated) return;
 
+    // 누가 새로고침을 불렀는지 알 수 있게 호출 위치를 남김 (비어 있을 수도 있음)
+    const stack = String(new Error().stack || '').split('\n').slice(2, 9).map((l) => l.trim()).join('\n');
+    const info = `종류: ${e.navigationType} / 취소 가능: ${e.cancelable ? '예' : '아니오'} / 주소 같음: ${isSameUrl ? '예' : '아니오'}\n호출 위치:\n${stack || '(알 수 없음)'}`;
+
     if (!e.cancelable) {
-        addLog('fail', '새로고침이 일어났는데 취소할 수 없는 종류라서 막지 못했어요.');
+        addLog('fail', '코드가 새로고침을 일으켰는데 취소할 수 없는 종류라서 막지 못했어요.', info);
         return;
     }
     e.preventDefault();
     addLog('ok', isReload
-        ? '페이지가 스스로 일으킨 새로고침을 취소했어요.'
-        : '같은 주소로 다시 이동하는 것을 취소했어요.');
+        ? '코드가 일으킨 새로고침을 취소했어요.'
+        : '같은 주소로 다시 이동하는 것을 취소했어요.', info);
     notifyBlocked();
 }
 
@@ -219,7 +330,11 @@ function acquireLock() {
     navigator.locks
         .request(`rf-keepalive-${Math.random().toString(36).slice(2)}`, { signal: ac.signal }, () =>
             new Promise((resolve) => ac.signal.addEventListener('abort', resolve, { once: true })))
-        .catch(() => { /* 무시 */ });
+        .catch((err) => {
+            if (err?.name === 'AbortError' || lockErrNoted) return;
+            lockErrNoted = true;
+            logErr('Web Lock을 잡지 못했어요', err);
+        });
 }
 
 function releaseLock() {
@@ -242,20 +357,51 @@ function applyGuard() {
     if (nav) nav.addEventListener('navigate', onNavigate);
     else window.addEventListener('beforeunload', onBeforeUnload);
     acquireLock();
-
-    if (!guardNoted) {
-        guardNoted = true;
-        addLog('info', '새로고침 방지를 시작했어요.');
-        if (!nav) addLog('fail', '이 브라우저는 자동 새로고침 취소를 지원하지 않아서 확인창 방식으로 대신해요. (모바일에선 안 뜰 수 있어요)');
-        if (!navigator.locks) addLog('fail', '탭 정리를 줄이는 기능(Web Lock)을 쓸 수 없어요. https 주소가 아니거나 브라우저가 지원하지 않아요.');
-    }
 }
 
-// 페이지가 열린 이유를 확인해서 기록
+/* ---------------- 페이지 상태 추적 / 새로고침 원인 분석 ---------------- */
+// 페이지가 사라지면 그 뒤 일은 기록할 수 없어서, 화면 보임/숨김 같은 변화가 있을 때만 상태를 저장해 두었다가
+// 다음에 열릴 때 비교해서 '어떻게 사라졌는지'를 추정해요. (타이머 없음)
+
+function readAlive() {
+    try { return JSON.parse(sessionStorage.getItem(ALIVE) || 'null'); } catch { return null; }
+}
+
+function beat(why) {
+    try {
+        sessionStorage.setItem(ALIVE, JSON.stringify({
+            t: Date.now(),
+            why,
+            vis: document.visibilityState,
+            hiddenAt: lastHiddenAt,
+            freezeAt: lastFreezeAt,
+            unl: unloading,
+        }));
+    } catch { /* 무시 */ }
+}
+
+function startHeartbeat() {
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') lastHiddenAt = Date.now();
+        beat(`visibility:${document.visibilityState}`);
+    });
+    window.addEventListener('pagehide', (e) => {
+        unloading = e.persisted ? 'bfcache' : 'pagehide';
+        beat(unloading);
+    });
+    window.addEventListener('pageshow', () => { unloading = ''; beat('pageshow'); });
+    document.addEventListener('freeze', () => { lastFreezeAt = Date.now(); beat('freeze'); });
+    document.addEventListener('resume', () => beat('resume'));
+    beat('start');
+}
+
+// 페이지가 열린 이유를 확인해서 기록 (startHeartbeat 보다 먼저 불러야 함)
 function checkLoadReason() {
+    const prev = readAlive();
     let wasManual = false;
     try {
-        wasManual = sessionStorage.getItem(FLAG) === '1';
+        const t = Number(sessionStorage.getItem(FLAG));
+        wasManual = t > 0 && Date.now() - t < 15000; // 15초 안에 버튼으로 한 것만 '직접'으로 인정
         sessionStorage.removeItem(FLAG);
     } catch { /* 무시 */ }
 
@@ -266,15 +412,28 @@ function checkLoadReason() {
     if (!getSettings().guard) return;
 
     const nav = performance.getEntriesByType?.('navigation')?.[0];
-    let reason = '';
-    if (document.wasDiscarded) {
-        reason = '브라우저가 메모리를 정리하려고 탭을 닫았다가 다시 불러왔어요. 확장으로는 막을 수 없는 경우예요.';
-    } else if (nav?.type === 'reload') {
-        reason = '브라우저가 페이지를 다시 불러왔어요. (당겨서 새로고침, F5, 앱 복귀 중 재로드 등) 확장이 취소할 수 없는 종류예요.';
-    }
-    if (!reason) return;
+    const type = nav?.type || '?';
+    const discarded = !!document.wasDiscarded;
+    const abrupt = !!prev && !prev.unl; // 이전 페이지가 '닫히는 과정' 없이 사라짐
+    if (!discarded && type !== 'reload' && !abrupt) return;
 
-    addLog('fail', reason);
+    const now = Date.now();
+    let guess;
+    if (discarded) guess = '브라우저가 메모리 정리를 위해 탭을 폐기했다가 다시 불러왔어요';
+    else if (abrupt && prev.vis === 'hidden') guess = '백그라운드에 있는 동안 브라우저나 폰이 탭을 강제로 종료한 것 같아요';
+    else if (abrupt) guess = '페이지가 갑자기 종료됐어요 (충돌·메모리 부족 등)';
+    else guess = '직접 새로고침(F5·당겨서 새로고침)이거나, 확장이 취소하지 못한 새로고침이에요';
+
+    const lines = [`불러온 방식: ${type} / 탭 폐기됨: ${discarded ? '예' : '아니오'}`];
+    if (prev) {
+        lines.push(`이전 페이지 마지막 신호: ${fmtDur(now - prev.t)} 전 (${prev.why}, 화면 ${prev.vis === 'hidden' ? '숨김' : '보임'}${prev.unl ? ', 닫히는 중' : ''})`);
+        if (prev.vis === 'hidden' && prev.hiddenAt) lines.push(`화면이 숨겨진 뒤 경과: ${fmtDur(now - prev.hiddenAt)}`);
+        if (prev.freezeAt) lines.push(`동결(freeze) 기록: ${fmtDur(now - prev.freezeAt)} 전`);
+    } else {
+        lines.push('이전 페이지 신호 없음 (이 탭에서 처음 열렸거나 저장소가 비었어요)');
+    }
+
+    addLog('fail', `막지 못한 새로고침 — ${guess}`, lines.join('\n'));
     if (typeof toastr !== 'undefined') toastr.warning('새로고침 방어 실패 🫠', NAME);
 }
 
@@ -324,8 +483,10 @@ function buildSettingsHtml() {
 
                 <div class="rf-pane" data-pane="log">
                     <div class="rf-log-toolbar">
+                        <button type="button" class="rf-copy">로그 복사</button>
                         <button type="button" class="rf-clear">기록 지우기</button>
                     </div>
+                    <textarea class="rf-log-raw" readonly></textarea>
                     <div class="rf-log-list"></div>
                 </div>
             </div>
@@ -379,6 +540,8 @@ function refreshUI() {
     renderLog();
 }
 
+captureOwnErrors();
+
 jQuery(() => {
     getSettings();
 
@@ -410,6 +573,7 @@ jQuery(() => {
         activeTab = this.dataset.tab;
         updateTabs();
     });
+    $root.on('click', '.rf-copy', copyLog);
     $root.on('click', '.rf-clear', () => {
         getSettings().log = [];
         saveSettingsDebounced();
@@ -417,5 +581,6 @@ jQuery(() => {
     });
 
     checkLoadReason();
+    startHeartbeat();
     refreshUI();
 });

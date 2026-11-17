@@ -1,5 +1,5 @@
-/* 새로고침 (refresh_button) — CSS 버전: v1.4.1
- * ★ 코드를 고칠 때마다 이 버전을 올릴 것! (index.js, manifest.json 의 버전과 같은 숫자로)
+/* 새로고침 (refresh_button) — CSS 버전: v1.6.0
+ * ★ 코드를 고칠 때마다 이 버전을 올릴 것! (index.js 의 버전과 같은 숫자로)
  *
  * 주의: .inline-drawer-content 의 display는 건드리지 않는다. (접기/펼치기는 SillyTavern이 제어)
  */
@@ -227,6 +227,7 @@
 .rf-settings .rf-reload:focus-visible,
 .rf-settings .rf-tab:focus-visible,
 .rf-settings .rf-clear:focus-visible,
+.rf-settings .rf-copy:focus-visible,
 .rf-settings .rf-seg button:focus-visible {
     outline: 2px solid var(--rf-accent);
     outline-offset: 2px;
@@ -236,10 +237,12 @@
 .rf-settings .rf-log-toolbar {
     display: flex;
     justify-content: flex-end;
+    gap: 6px;
     margin: 8px 0 4px;
 }
 
-.rf-settings .rf-clear {
+.rf-settings .rf-clear,
+.rf-settings .rf-copy {
     min-height: 28px;
     margin: 0;
     padding: 0 12px;
@@ -276,7 +279,32 @@
 .rf-settings .rf-log-tag { font-weight: 700; }
 .rf-settings .rf-log-ok .rf-log-tag   { color: var(--rf-yes-bg); }
 .rf-settings .rf-log-fail .rf-log-tag { color: var(--rf-no-bg); }
+.rf-settings .rf-log-error .rf-log-tag { color: #d98a1f; }
 .rf-settings .rf-log-info .rf-log-tag { opacity: 0.7; }
+
+.rf-settings .rf-log-detail {
+    margin-top: 4px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--rf-fill);
+    font-family: monospace;
+    font-size: 0.72em;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    opacity: 0.85;
+}
+
+.rf-settings .rf-log-raw {
+    display: none;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 140px;
+    margin: 4px 0 8px;
+    font-size: 0.72em;
+}
+
+.rf-settings .rf-log-raw.rf-show { display: block; }
 
 .rf-settings .rf-log-empty {
     padding: 20px 0;
