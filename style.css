@@ -1,4 +1,4 @@
-/* 새로고침 (refresh_button) — CSS 버전: v1.6.0
+/* 새로고침 (refresh_button) — CSS 버전: v1.7.1
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것! (index.js 의 버전과 같은 숫자로)
  *
  * 주의: .inline-drawer-content 의 display는 건드리지 않는다. (접기/펼치기는 SillyTavern이 제어)
@@ -227,22 +227,27 @@
 .rf-settings .rf-reload:focus-visible,
 .rf-settings .rf-tab:focus-visible,
 .rf-settings .rf-clear:focus-visible,
-.rf-settings .rf-copy:focus-visible,
+.rf-settings .rf-copy-one:focus-visible,
 .rf-settings .rf-seg button:focus-visible {
     outline: 2px solid var(--rf-accent);
     outline-offset: 2px;
 }
 
-/* ---------------- 기록 ---------------- */
-.rf-settings .rf-log-toolbar {
+/* ---------------- 기록 (접이식 항목) ---------------- */
+.rf-settings .rf-logbar {
     display: flex;
-    justify-content: flex-end;
-    gap: 6px;
-    margin: 8px 0 4px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 8px 0 12px;
+    font-size: 0.85em;
 }
 
+.rf-settings .rf-logbtns { display: flex; gap: 6px; }
+
 .rf-settings .rf-clear,
-.rf-settings .rf-copy {
+.rf-settings .rf-copy-one {
     min-height: 28px;
     margin: 0;
     padding: 0 12px;
@@ -257,9 +262,22 @@
     -webkit-tap-highlight-color: transparent;
 }
 
-.rf-settings .rf-log-item {
-    padding: 8px 2px;
-    border-top: 1px solid var(--rf-line);
+.rf-settings .rf-log {
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--rf-line);
+    border-left-width: 4px;
+    border-radius: 8px;
+}
+
+.rf-settings .rf-log-ok { border-left-color: #3fb950; }
+.rf-settings .rf-log-fail,
+.rf-settings .rf-log-error { border-left-color: #e5534b; }
+.rf-settings .rf-log-warn { border-left-color: #d4a72c; }
+
+.rf-settings .rf-log summary {
+    cursor: pointer;
+    overflow-wrap: anywhere;
 }
 
 .rf-settings .rf-log-time {
@@ -277,22 +295,29 @@
 }
 
 .rf-settings .rf-log-tag { font-weight: 700; }
-.rf-settings .rf-log-ok .rf-log-tag   { color: var(--rf-yes-bg); }
-.rf-settings .rf-log-fail .rf-log-tag { color: var(--rf-no-bg); }
-.rf-settings .rf-log-error .rf-log-tag { color: #d98a1f; }
+.rf-settings .rf-log-ok .rf-log-tag { color: #3fb950; }
+.rf-settings .rf-log-fail .rf-log-tag,
+.rf-settings .rf-log-error .rf-log-tag { color: #e5534b; }
+.rf-settings .rf-log-warn .rf-log-tag { color: #d4a72c; }
 .rf-settings .rf-log-info .rf-log-tag { opacity: 0.7; }
 
-.rf-settings .rf-log-detail {
-    margin-top: 4px;
-    padding: 6px 8px;
-    border-radius: 6px;
-    background: var(--rf-fill);
-    font-family: monospace;
-    font-size: 0.72em;
-    line-height: 1.5;
-    white-space: pre-wrap;
+.rf-settings .rf-logbody {
+    margin-top: 6px;
+    font-size: 0.9em;
     overflow-wrap: anywhere;
-    opacity: 0.85;
+}
+
+.rf-settings .rf-logbody .rf-copy-one { margin-bottom: 6px; }
+
+.rf-settings .rf-logbody pre {
+    max-height: 220px;
+    overflow: auto;
+    margin: 0;
+    padding: 6px;
+    white-space: pre-wrap;
+    font-size: 0.85em;
+    background: rgba(127, 127, 127, 0.12);
+    border-radius: 6px;
 }
 
 .rf-settings .rf-log-raw {
@@ -307,8 +332,7 @@
 .rf-settings .rf-log-raw.rf-show { display: block; }
 
 .rf-settings .rf-log-empty {
-    padding: 20px 0;
-    border-top: 1px solid var(--rf-line);
+    padding: 24px 0;
     text-align: center;
     font-size: 0.88em;
     opacity: 0.55;

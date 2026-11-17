@@ -1,6 +1,6 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.6.0
+ * 코드 버전: v1.7.1
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
@@ -9,14 +9,15 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const VERSION = 'v1.6.0';
+const VERSION = 'v1.7.1';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
+const USER_FLAG = 'rf_user_reload'; // 당겨서·F5 등 사용자가 브라우저로 한 새로고침(확인됨) 표시(시각)
 const ALIVE = 'rf_page_alive';     // 페이지가 마지막으로 살아 있던 때의 상태(탭 단위로 저장)
 const LOG_MAX = 20;
 const DEFAULTS = { enabled: true, confirm: true, guard: true };
-const TAGS = { ok: '막음', fail: '실패', error: '오류', info: '참고' };
+const TAGS = { ok: '막음', fail: '실패', warn: '새로고침', error: '오류', info: '참고' };
 
 let popupOpen = false;
 let manualReload = false;
@@ -46,7 +47,7 @@ function getSettings() {
 
 /* ---------------- 로그 ---------------- */
 // 새로고침이 안 막혔을 때, 또는 오류가 났을 때 원인을 확인하려고 남기는 기록이에요.
-// 'ok' 막음 / 'fail' 실패 / 'error' 오류 / 'info' 참고
+// 'ok' 막음(초록) / 'fail' 실패(빨강) / 'warn' 새로고침·직접 한 것 포함(노랑) / 'error' 오류(빨강) / 'info' 참고
 
 const pad = (n) => String(n).padStart(2, '0');
 const clip = (str, n) => (str.length > n ? `${str.slice(0, n)}…` : str);
@@ -111,8 +112,14 @@ function renderLog() {
     const badge = document.querySelector('.rf-settings .rf-badge');
     if (badge) badge.textContent = String(s.log.length);
 
+    const count = document.querySelector('.rf-settings .rf-logcount');
+    if (count) count.textContent = `기록 ${s.log.length}개`;
+
     const list = document.querySelector('.rf-settings .rf-log-list');
     if (!list) return;
+
+    // 다시 그려도 펼쳐 둔 기록은 그대로 열려 있게
+    const opened = new Set([...list.querySelectorAll('details[open]')].map((d) => d.dataset.k));
     list.textContent = '';
 
     if (!s.log.length) {
@@ -123,35 +130,47 @@ function renderLog() {
         return;
     }
 
-    for (const item of s.log) {
-        const row = document.createElement('div');
-        row.className = `rf-log-item rf-log-${item.type}`;
+    s.log.forEach((item, i) => {
+        const det = document.createElement('details');
+        det.className = `rf-log rf-log-${item.type}`;
+        det.dataset.k = String(item.t);
+        if (opened.has(det.dataset.k)) det.open = true;
 
+        const sum = document.createElement('summary');
         const time = document.createElement('div');
         time.className = 'rf-log-time';
         time.textContent = fmtTime(item.t);
-
         const text = document.createElement('div');
         text.className = 'rf-log-text';
         const tag = document.createElement('span');
         tag.className = 'rf-log-tag';
         tag.textContent = TAGS[item.type] || '참고';
         text.append(tag, ` ${item.text}${item.n > 1 ? ` (×${item.n})` : ''}`);
+        sum.append(time, text);
 
-        row.append(time, text);
+        const body = document.createElement('div');
+        body.className = 'rf-logbody';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rf-copy-one';
+        btn.dataset.i = String(i);
+        btn.textContent = '이 기록 복사';
+        body.append(btn);
         if (item.detail) {
-            const detail = document.createElement('div');
-            detail.className = 'rf-log-detail';
-            detail.textContent = item.detail;
-            row.append(detail);
+            const pre = document.createElement('pre');
+            pre.textContent = item.detail;
+            body.append(pre);
         }
-        list.appendChild(row);
-    }
+
+        det.append(sum, body);
+        list.appendChild(det);
+    });
 }
 
 /* ---------------- 로그 복사 ---------------- */
 
-function buildLogText() {
+// indices 를 주면 그 기록만, 안 주면 전체
+function buildLogText(indices) {
     const s = getSettings();
     const standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || navigator.standalone === true;
     const yn = (v) => (v ? 'O' : 'X');
@@ -162,14 +181,19 @@ function buildLogText() {
         `설정: 방지 ${s.guard ? '켜짐' : '꺼짐'} / 새로고침 기능 ${s.enabled ? '켜짐' : '꺼짐'}`,
         `현재 화면: ${document.visibilityState} / 이 페이지를 연 시각: ${fmtTime(performance.timeOrigin)}`,
     ];
-    const body = s.log.length
-        ? s.log.map((x, i) => {
+    const picked = indices ? indices.filter((i) => s.log[i]) : s.log.map((_, i) => i);
+    const body = picked.length
+        ? picked.map((i) => {
+            const x = s.log[i];
             const lines = [`${i + 1}. ${fmtTime(x.t)} [${TAGS[x.type] || '참고'}] ${x.text}${x.n > 1 ? ` (×${x.n})` : ''}`];
             if (x.detail) lines.push(...x.detail.split('\n').map((l) => `   ${l}`));
             return lines.join('\n');
         }).join('\n\n')
         : '(기록 없음)';
-    return `${head.join('\n')}\n\n기록 ${s.log.length}개 (위가 최신)\n\n${body}`;
+    const title = indices
+        ? `기록 ${picked.map((i) => i + 1).join(', ')}번 (전체 ${s.log.length}개 중)`
+        : `기록 ${s.log.length}개 (위가 최신)`;
+    return `${head.join('\n')}\n\n${title}\n\n${body}`;
 }
 
 function fallbackCopy(text) {
@@ -186,8 +210,17 @@ function fallbackCopy(text) {
     return ok;
 }
 
-async function copyLog() {
-    const text = buildLogText();
+// 복사됐다는 표시는 알림 대신 버튼 글자를 잠깐 바꿔서 보여줌
+function flashBtn(btn, label) {
+    if (!btn) return;
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.textContent = label;
+    clearTimeout(btn._rfT);
+    btn._rfT = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1500);
+}
+
+async function copyLog(btn, indices) {
+    const text = buildLogText(indices);
     const raw = document.querySelector('.rf-settings .rf-log-raw');
     raw?.classList.remove('rf-show');
 
@@ -199,10 +232,7 @@ async function copyLog() {
         ok = fallbackCopy(text);
     }
 
-    if (ok) {
-        if (typeof toastr !== 'undefined') toastr.success('로그를 복사했어요', NAME);
-        return;
-    }
+    if (ok) { flashBtn(btn, '복사됨'); return; }
     // 복사가 막힌 환경이면 글을 보여주고 직접 복사하게 함
     if (raw) {
         raw.value = text;
@@ -210,7 +240,6 @@ async function copyLog() {
         raw.focus();
         raw.select();
     }
-    if (typeof toastr !== 'undefined') toastr.error('복사가 막혀 있어요. 아래 칸의 글을 직접 복사해 주세요.', NAME);
 }
 
 /* ---------------- 새로고침 ---------------- */
@@ -305,7 +334,10 @@ function onNavigate(e) {
     const isReload = e.navigationType === 'reload';
     const isSameUrl = !e.destination?.sameDocument && e.destination?.url === location.href;
     if (!isReload && !isSameUrl) return;
-    if (e.userInitiated) return;
+    if (e.userInitiated) {
+        try { sessionStorage.setItem(USER_FLAG, String(Date.now())); } catch { /* 무시 */ }
+        return;
+    }
 
     // 누가 새로고침을 불렀는지 알 수 있게 호출 위치를 남김 (비어 있을 수도 있음)
     const stack = String(new Error().stack || '').split('\n').slice(2, 9).map((l) => l.trim()).join('\n');
@@ -396,17 +428,26 @@ function startHeartbeat() {
 }
 
 // 페이지가 열린 이유를 확인해서 기록 (startHeartbeat 보다 먼저 불러야 함)
+// 빨강(실패) = 사용자가 안 했는데 탭이 종료·폐기된 경우 / 노랑 = 새로고침 (직접 한 것 포함)
 function checkLoadReason() {
     const prev = readAlive();
-    let wasManual = false;
+    const now = Date.now();
+    let manualAt = 0;
+    let userAt = 0;
     try {
-        const t = Number(sessionStorage.getItem(FLAG));
-        wasManual = t > 0 && Date.now() - t < 15000; // 15초 안에 버튼으로 한 것만 '직접'으로 인정
+        manualAt = Number(sessionStorage.getItem(FLAG)) || 0;
+        userAt = Number(sessionStorage.getItem(USER_FLAG)) || 0;
         sessionStorage.removeItem(FLAG);
+        sessionStorage.removeItem(USER_FLAG);
     } catch { /* 무시 */ }
 
-    if (wasManual) {
-        addLog('info', '새로고침 버튼으로 직접 새로고침했어요.');
+    // 15초 안에 한 것만 '직접'으로 인정
+    if (manualAt && now - manualAt < 15000) {
+        addLog('warn', '직접 새로고침했어요 (새로고침 버튼)');
+        return;
+    }
+    if (userAt && now - userAt < 15000) {
+        addLog('warn', '직접 새로고침했어요 (당겨서·F5 등)');
         return;
     }
     if (!getSettings().guard) return;
@@ -417,13 +458,6 @@ function checkLoadReason() {
     const abrupt = !!prev && !prev.unl; // 이전 페이지가 '닫히는 과정' 없이 사라짐
     if (!discarded && type !== 'reload' && !abrupt) return;
 
-    const now = Date.now();
-    let guess;
-    if (discarded) guess = '브라우저가 메모리 정리를 위해 탭을 폐기했다가 다시 불러왔어요';
-    else if (abrupt && prev.vis === 'hidden') guess = '백그라운드에 있는 동안 브라우저나 폰이 탭을 강제로 종료한 것 같아요';
-    else if (abrupt) guess = '페이지가 갑자기 종료됐어요 (충돌·메모리 부족 등)';
-    else guess = '직접 새로고침(F5·당겨서 새로고침)이거나, 확장이 취소하지 못한 새로고침이에요';
-
     const lines = [`불러온 방식: ${type} / 탭 폐기됨: ${discarded ? '예' : '아니오'}`];
     if (prev) {
         lines.push(`이전 페이지 마지막 신호: ${fmtDur(now - prev.t)} 전 (${prev.why}, 화면 ${prev.vis === 'hidden' ? '숨김' : '보임'}${prev.unl ? ', 닫히는 중' : ''})`);
@@ -433,8 +467,19 @@ function checkLoadReason() {
         lines.push('이전 페이지 신호 없음 (이 탭에서 처음 열렸거나 저장소가 비었어요)');
     }
 
-    addLog('fail', `막지 못한 새로고침 — ${guess}`, lines.join('\n'));
-    if (typeof toastr !== 'undefined') toastr.warning('새로고침 방어 실패 🫠', NAME);
+    // 사용자가 한 게 아닌데 페이지가 사라진 경우만 '실패'
+    if (discarded || abrupt) {
+        let guess;
+        if (discarded) guess = '브라우저가 메모리 정리를 위해 탭을 폐기했다가 다시 불러왔어요';
+        else if (prev.vis === 'hidden') guess = '백그라운드에 있는 동안 브라우저나 폰이 탭을 강제로 종료한 것 같아요';
+        else guess = '페이지가 갑자기 종료됐어요 (충돌·메모리 부족 등)';
+        addLog('fail', `막지 못한 새로고침 — ${guess}`, lines.join('\n'));
+        if (typeof toastr !== 'undefined') toastr.warning('새로고침 방어 실패 🫠', NAME);
+        return;
+    }
+
+    // 정상적으로 닫히고 다시 열렸다면 직접 한 새로고침일 수 있어서 실패로 치지 않음
+    addLog('warn', '새로고침됐어요 — 직접 한 것인지 확인하지 못했어요', lines.join('\n'));
 }
 
 /* ---------------- UI ---------------- */
@@ -482,9 +527,11 @@ function buildSettingsHtml() {
                 </div>
 
                 <div class="rf-pane" data-pane="log">
-                    <div class="rf-log-toolbar">
-                        <button type="button" class="rf-copy">로그 복사</button>
-                        <button type="button" class="rf-clear">기록 지우기</button>
+                    <div class="rf-logbar">
+                        <span class="rf-logcount">기록 0개</span>
+                        <span class="rf-logbtns">
+                            <button type="button" class="rf-clear">기록 지우기</button>
+                        </span>
                     </div>
                     <textarea class="rf-log-raw" readonly></textarea>
                     <div class="rf-log-list"></div>
@@ -573,7 +620,7 @@ jQuery(() => {
         activeTab = this.dataset.tab;
         updateTabs();
     });
-    $root.on('click', '.rf-copy', copyLog);
+    $root.on('click', '.rf-copy-one', function () { copyLog(this, [Number(this.dataset.i)]); });
     $root.on('click', '.rf-clear', () => {
         getSettings().log = [];
         saveSettingsDebounced();
