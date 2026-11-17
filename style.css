@@ -1,4 +1,4 @@
-/* 새로고침 (refresh_button) — CSS 버전: v1.7.1
+/* 새로고침 (refresh_button) — CSS 버전: v1.7.2
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것! (index.js 의 버전과 같은 숫자로)
  *
  * 주의: .inline-drawer-content 의 display는 건드리지 않는다. (접기/펼치기는 SillyTavern이 제어)
@@ -42,13 +42,12 @@
     margin-right: 12px;
     border-radius: 50%;
     background: #e5534b;
-    box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.22);
-    transition: background 0.2s, box-shadow 0.2s;
+    transition: background 0.2s;
 }
 
-.rf-settings .rf-status.rf-on   { background: #3fb950; box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.22); }
-.rf-settings .rf-status.rf-warn { background: #e3b341; box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.25); }
-.rf-settings .rf-status.rf-off  { background: #e5534b; box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.22); }
+.rf-settings .rf-status.rf-on   { background: #3fb950; }
+.rf-settings .rf-status.rf-warn { background: #e3b341; }
+.rf-settings .rf-status.rf-off  { background: #e5534b; }
 
 /* ---------------- 설정 / 기록 탭 ---------------- */
 .rf-settings .rf-tabs {

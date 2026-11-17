@@ -1,6 +1,6 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.7.1
+ * 코드 버전: v1.7.2
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
@@ -9,7 +9,7 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const VERSION = 'v1.7.1';
+const VERSION = 'v1.7.2';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
