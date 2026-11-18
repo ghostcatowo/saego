@@ -1,6 +1,6 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.9.4
+ * 코드 버전: v1.9.7
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
@@ -9,7 +9,7 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const VERSION = 'v1.9.4';
+const VERSION = 'v1.9.7';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
@@ -22,7 +22,6 @@ const TAGS = { ok: '막음', fail: '실패', warn: '새로고침', error: '오�
 
 let popupOpen = false;
 let manualReload = false;
-let codeReload = false;     // 실리태번·확장이 코드로 일으킨 새로고침이면 잠깐 true (막지 않고 통과)
 let lockAbort = null;
 let lockErrNoted = false;
 let rtc = null;              // 탭이 정리되지 않게 하려는 '살아 있는 연결'
@@ -87,13 +86,13 @@ function addLog(type, text, detail = '') {
 }
 
 // 오류 기록에 주소·폴더 경로(서버 IP, 확장 폴더 이름 등)가 남지 않게 파일 이름과 줄 번호만 남김
-function scrub(text) {
+function stripPaths(text) {
     return String(text || '').replace(/(?:https?|file|chrome-extension):\/\/[^\s)]*\/([^\/\s)?#]*)(?:[?#][^\s):]*)?/g, '$1');
 }
 
 function logErr(label, err) {
-    const stack = scrub(String(err?.stack || '').split('\n').slice(0, 6).join('\n'));
-    addLog('error', `${label}: ${scrub(err?.message || err)}`, stack);
+    const stack = stripPaths(String(err?.stack || '').split('\n').slice(0, 6).join('\n'));
+    addLog('error', `${label}: ${stripPaths(err?.message || err)}`, stack);
 }
 
 // 이 확장에서 난 오류만 기록 (다른 확장의 오류까지 쌓이지 않게)
@@ -102,7 +101,7 @@ function captureOwnErrors() {
         try {
             const stack = String(e.error?.stack || '');
             if (!String(e.filename || '').includes(MODULE) && !stack.includes(MODULE)) return;
-            addLog('error', `오류: ${scrub(e.message)}`, scrub(`${e.filename}:${e.lineno}:${e.colno}\n${stack.split('\n').slice(0, 6).join('\n')}`));
+            addLog('error', `오류: ${stripPaths(e.message)}`, stripPaths(`${e.filename}:${e.lineno}:${e.colno}\n${stack.split('\n').slice(0, 6).join('\n')}`));
         } catch { /* 무시 */ }
     });
     window.addEventListener('unhandledrejection', (e) => {
@@ -110,7 +109,7 @@ function captureOwnErrors() {
             const r = e.reason;
             const stack = String(r?.stack || '');
             if (!stack.includes(MODULE)) return;
-            addLog('error', `처리 안 된 오류: ${scrub(r?.message || r)}`, scrub(stack.split('\n').slice(0, 6).join('\n')));
+            addLog('error', `처리 안 된 오류: ${stripPaths(r?.message || r)}`, stripPaths(stack.split('\n').slice(0, 6).join('\n')));
         } catch { /* 무시 */ }
     });
 }
@@ -340,16 +339,9 @@ function tidyNativePopup(popup, POPUP_RESULT) {
 }
 
 /* ---------------- 새로고침 방지 ---------------- */
-// v1.2 방식: beforeunload 로 새로고침을 막고(브라우저 확인창), Web Lock 을 쥐고 있음. 거기에 연결 유지(WebRTC)를 더함.
-// 단, 새로고침 버튼과 실리태번·확장이 코드로 일으킨 새로고침(확장 켜기/끄기 등)은 막지 않고 통과시킴.
-// onNavigate 가 '코드가 한 것인지' 판별하고(탐색 API), 그랬다는 사실만 기록해 둠 (기록 탭용, 주소·경로는 남기지 않음).
-
-function onBeforeUnload(e) {
-    if (manualReload || codeReload) return;
-    e.preventDefault();
-    e.returnValue = '';
-    return '';
-}
+// 어떤 새로고침도 막거나 취소하지 않음 (실리태번·확장·당겨서·F5 모두 그대로 됨).
+// 폰이 백그라운드 탭을 종료·동결해서 생기는 새로고침을 줄이려고, 탭이 '활동 중'으로 보이게 하는 연결 유지(WebRTC)와 Web Lock 을 씀.
+// onNavigate 는 막지 않고 누가 새로고침했는지만 기록해 둠 (기록 탭용, 주소·경로는 남기지 않음).
 
 function onNavigate(e) {
     if (manualReload) return;
@@ -360,10 +352,7 @@ function onNavigate(e) {
         try { sessionStorage.setItem(USER_FLAG, String(Date.now())); } catch { /* 무시 */ }
         return;
     }
-    // 코드가 한 새로고침이라 막지 않고 통과시킴 (beforeunload 확인창이 안 뜨게)
-    codeReload = true;
-    setTimeout(() => { codeReload = false; }, 5000); // 새로고침이 취소돼도 방지가 계속 꺼져 있지 않게
-    // 취소하지 않고, 누가 불렀는지만 남김 (다음에 열릴 때 기록)
+    // 코드(실리태번·확장)가 한 새로고침: 취소하지 않고, 누가 불렀는지만 남김 (다음에 열릴 때 기록)
     try { sessionStorage.setItem(CODE_FLAG, JSON.stringify({ t: Date.now() })); } catch { /* 무시 */ }
 }
 
@@ -442,7 +431,6 @@ function applyGuard() {
     const nav = window.navigation;
     document.documentElement.classList.toggle('rf-guard', on);
     nav?.removeEventListener('navigate', onNavigate);
-    window.removeEventListener('beforeunload', onBeforeUnload);
 
     if (!on) {
         releaseLock();
@@ -450,7 +438,6 @@ function applyGuard() {
         return;
     }
     nav?.addEventListener('navigate', onNavigate);
-    window.addEventListener('beforeunload', onBeforeUnload);
     acquireLock();
     ensureKeepAlive();
 }
@@ -599,7 +586,7 @@ function buildSettingsHtml() {
                     ${segBlock('confirm', '새로고침 팝업',
                         '켜면 새로고침 전에 한 번 물어봐요. 마법봉 메뉴에도 똑같이 적용돼요.')}
                     ${segBlock('guard', '새로고침 방지',
-                        '새로고침 버튼과 실리태번이 하는 새로고침(확장 켜기/끄기 등)은 그대로 돼요. 그 밖의 새로고침(당겨서·F5 등)은 확인창이 떠요. 브라우저가 메모리 부족으로 탭을 정리하는 건 완전히 막을 수 없어요.')}
+                        '다른 앱을 쓰는 동안 폰이 탭을 종료해서 새로고침되는 걸 줄여봐요. 어떤 새로고침도 막지는 않아요(당겨서·F5·실리태번 모두 그대로 돼요). 완전히 막을 수는 없어요.')}
                     <div class="rf-legend">
                         표시등: 초록 = 방지 켜짐 · 노랑 = 방지만 켜짐(새로고침 기능 꺼짐) · 빨강 = 방지 꺼짐
                     </div>
