@@ -1,6 +1,6 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.9.7
+ * 코드 버전: v1.9.8
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
@@ -9,7 +9,7 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const VERSION = 'v1.9.7';
+const VERSION = 'v1.9.8';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
@@ -17,6 +17,7 @@ const CODE_FLAG = 'rf_code_reload';   // 코드(실리태번·확장)가 일으�
 const USER_FLAG = 'rf_user_reload'; // 당겨서·F5 등 사용자가 브라우저로 한 새로고침(확인됨) 표시(시각)
 const ALIVE = 'rf_page_alive';     // 페이지가 마지막으로 살아 있던 때의 상태(탭 단위로 저장)
 const LOG_MAX = 20;
+const FREEZE_LOG_MIN_MS = 5 * 60 * 1000; // 이 시간 이상 동결됐다가 무사히 돌아온 경우만 기록 (짧은 건 쌓이지 않게)
 const DEFAULTS = { enabled: true, confirm: true, guard: true };
 const TAGS = { ok: '막음', fail: '실패', warn: '새로고침', error: '오류', info: '참고' };
 
@@ -477,8 +478,8 @@ function startHeartbeat() {
     window.addEventListener('pageshow', () => { unloading = ''; beat('pageshow'); });
     document.addEventListener('freeze', () => { lastFreezeAt = Date.now(); beat('freeze'); });
     document.addEventListener('resume', () => {
-        // 동결됐다가 새로고침 없이 돌아온 경우도 남겨서, 연결 유지가 효과 있는지 확인할 수 있게 함
-        if (lastFreezeAt) addLog('info', `동결됐다가 무사히 돌아왔어요 (약 ${fmtDur(Date.now() - lastFreezeAt)} 동결)`, `연결 유지: ${rtcState()}`);
+        // 오래(5분 이상) 동결됐다가 새로고침 없이 돌아온 경우만 남겨서, 연결 유지가 효과 있는지 확인할 수 있게 함
+        if (lastFreezeAt && Date.now() - lastFreezeAt >= FREEZE_LOG_MIN_MS) addLog('info', `동결됐다가 무사히 돌아왔어요 (약 ${fmtDur(Date.now() - lastFreezeAt)} 동결)`, `연결 유지: ${rtcState()}`);
         lastFreezeAt = 0;
         beat('resume');
     });
