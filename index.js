@@ -1,6 +1,6 @@
 /**
  * 새로고침 (refresh_button)
- * 코드 버전: v1.9.1
+ * 코드 버전: v1.9.4
  *
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것!
  *   - style.css 맨 위 버전, 아래 VERSION 도 같은 숫자로 같이 올리기
@@ -9,11 +9,11 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const VERSION = 'v1.9.1';
+const VERSION = 'v1.9.4';
 const MODULE = 'refresh_button';
 const NAME = '새로고침';
 const FLAG = 'rf_manual_reload';   // 버튼으로 직접 새로고침했다는 표시(시각)
-const CODE_FLAG = 'rf_code_reload';   // 코드(실리태번·확장)가 일으킨 새로고침 표시(시각, 호출 위치)
+const CODE_FLAG = 'rf_code_reload';   // 코드(실리태번·확장)가 일으킨 새로고침 표시(시각)
 const USER_FLAG = 'rf_user_reload'; // 당겨서·F5 등 사용자가 브라우저로 한 새로고침(확인됨) 표시(시각)
 const ALIVE = 'rf_page_alive';     // 페이지가 마지막으로 살아 있던 때의 상태(탭 단위로 저장)
 const LOG_MAX = 20;
@@ -25,6 +25,8 @@ let manualReload = false;
 let codeReload = false;     // 실리태번·확장이 코드로 일으킨 새로고침이면 잠깐 true (막지 않고 통과)
 let lockAbort = null;
 let lockErrNoted = false;
+let rtc = null;              // 탭이 정리되지 않게 하려는 '살아 있는 연결'
+let rtcErrNoted = false;
 let activeTab = 'settings';
 
 // 페이지 상태 추적 (새로고침 원인 분석용)
@@ -84,9 +86,14 @@ function addLog(type, text, detail = '') {
     renderLog();
 }
 
+// 오류 기록에 주소·폴더 경로(서버 IP, 확장 폴더 이름 등)가 남지 않게 파일 이름과 줄 번호만 남김
+function scrub(text) {
+    return String(text || '').replace(/(?:https?|file|chrome-extension):\/\/[^\s)]*\/([^\/\s)?#]*)(?:[?#][^\s):]*)?/g, '$1');
+}
+
 function logErr(label, err) {
-    const stack = String(err?.stack || '').split('\n').slice(0, 6).join('\n');
-    addLog('error', `${label}: ${err?.message || err}`, stack);
+    const stack = scrub(String(err?.stack || '').split('\n').slice(0, 6).join('\n'));
+    addLog('error', `${label}: ${scrub(err?.message || err)}`, stack);
 }
 
 // 이 확장에서 난 오류만 기록 (다른 확장의 오류까지 쌓이지 않게)
@@ -95,7 +102,7 @@ function captureOwnErrors() {
         try {
             const stack = String(e.error?.stack || '');
             if (!String(e.filename || '').includes(MODULE) && !stack.includes(MODULE)) return;
-            addLog('error', `오류: ${e.message}`, `${e.filename}:${e.lineno}:${e.colno}\n${stack.split('\n').slice(0, 6).join('\n')}`);
+            addLog('error', `오류: ${scrub(e.message)}`, scrub(`${e.filename}:${e.lineno}:${e.colno}\n${stack.split('\n').slice(0, 6).join('\n')}`));
         } catch { /* 무시 */ }
     });
     window.addEventListener('unhandledrejection', (e) => {
@@ -103,7 +110,7 @@ function captureOwnErrors() {
             const r = e.reason;
             const stack = String(r?.stack || '');
             if (!stack.includes(MODULE)) return;
-            addLog('error', `처리 안 된 오류: ${r?.message || r}`, stack.split('\n').slice(0, 6).join('\n'));
+            addLog('error', `처리 안 된 오류: ${scrub(r?.message || r)}`, scrub(stack.split('\n').slice(0, 6).join('\n')));
         } catch { /* 무시 */ }
     });
 }
@@ -170,6 +177,30 @@ function renderLog() {
 
 /* ---------------- 로그 복사 ---------------- */
 
+// 브라우저 이름·버전과 OS 버전만 짧게 (기기 코드명 같은 건 남기지 않음). 모르는 브라우저면 원래 문자열을 그대로 보여줌
+function browserInfo() {
+    const ua = navigator.userAgent || '';
+    const ver = (re) => (ua.match(re) || [])[1];
+    const rules = [
+        ['삼성 인터넷', /SamsungBrowser\/(\d+)/], ['웨일', /Whale\/(\d+)/], ['엣지', /EdgA?\/(\d+)|EdgiOS\/(\d+)/],
+        ['오페라', /OPR\/(\d+)/], ['파이어폭스', /Firefox\/(\d+)|FxiOS\/(\d+)/], ['다음', /DaumApps\/(\d+)/],
+        ['네이버 앱', /NAVER\(inapp;[^)]*?(\d+)\)/], ['크롬', /Chrome\/(\d+)|CriOS\/(\d+)/], ['사파리', /Version\/(\d+)[^ ]* (?:Mobile\/\S+ )?Safari/],
+    ];
+    let name = '';
+    let v = '';
+    for (const [n, re] of rules) {
+        const m = ua.match(re);
+        if (m) { name = n; v = m[1] || m[2] || ''; break; }
+    }
+    const engine = ver(/Chrome\/(\d+)/);
+    const os = ver(/Android ([\d.]+)/) ? `안드로이드 ${ver(/Android ([\d.]+)/)}`
+        : ver(/OS ([\d_]+) like Mac/) ? `iOS ${ver(/OS ([\d_]+) like Mac/).replace(/_/g, '.')}`
+        : /Windows/.test(ua) ? '윈도우' : /Mac OS X/.test(ua) ? '맥' : /Linux/.test(ua) ? '리눅스' : '';
+    if (!name) return ua; // 처음 보는 브라우저는 원본 그대로
+    const eng = engine && name !== '크롬' ? ` (엔진 크롬 ${engine})` : '';
+    return `${name} ${v}${eng}${os ? ` / ${os}` : ''}`;
+}
+
 // indices 를 주면 그 기록만, 안 주면 전체
 function buildLogText(indices) {
     const s = getSettings();
@@ -177,10 +208,9 @@ function buildLogText(indices) {
     const yn = (v) => (v ? 'O' : 'X');
     const head = [
         `[새로고침 확장 ${VERSION}] 로그 복사 시각 ${fmtTime(Date.now())}`,
-        `기기: ${navigator.userAgent}`,
-        `지원: 탐색API ${yn(window.navigation)} / WebLock ${yn(navigator.locks)} / 보안연결 ${yn(window.isSecureContext)} / 설치앱모드 ${yn(standalone)} / 기기메모리 ${navigator.deviceMemory ?? '?'}GB`,
+        `브라우저: ${browserInfo()}`,
+        `지원: 탐색API ${yn(window.navigation)} / WebLock ${yn(navigator.locks)} / 보안연결 ${yn(window.isSecureContext)} / 설치앱모드 ${yn(standalone)}`,
         `설정: 방지 ${s.guard ? '켜짐' : '꺼짐'} / 새로고침 기능 ${s.enabled ? '켜짐' : '꺼짐'} / 연결 유지 ${rtcState()}`,
-        `현재 화면: ${document.visibilityState} / 이 페이지를 연 시각: ${fmtTime(performance.timeOrigin)}`,
     ];
     const picked = indices ? indices.filter((i) => s.log[i]) : s.log.map((_, i) => i);
     const body = picked.length
@@ -310,9 +340,9 @@ function tidyNativePopup(popup, POPUP_RESULT) {
 }
 
 /* ---------------- 새로고침 방지 ---------------- */
-// v1.2 방식: beforeunload 로 새로고침을 막고(브라우저 확인창), Web Lock 을 쥐고 있음.
+// v1.2 방식: beforeunload 로 새로고침을 막고(브라우저 확인창), Web Lock 을 쥐고 있음. 거기에 연결 유지(WebRTC)를 더함.
 // 단, 새로고침 버튼과 실리태번·확장이 코드로 일으킨 새로고침(확장 켜기/끄기 등)은 막지 않고 통과시킴.
-// onNavigate 가 '코드가 한 것인지' 판별하고(탐색 API), 누가 불렀는지 기록해 둠 (기록 탭용).
+// onNavigate 가 '코드가 한 것인지' 판별하고(탐색 API), 그랬다는 사실만 기록해 둠 (기록 탭용, 주소·경로는 남기지 않음).
 
 function onBeforeUnload(e) {
     if (manualReload || codeReload) return;
@@ -334,8 +364,7 @@ function onNavigate(e) {
     codeReload = true;
     setTimeout(() => { codeReload = false; }, 5000); // 새로고침이 취소돼도 방지가 계속 꺼져 있지 않게
     // 취소하지 않고, 누가 불렀는지만 남김 (다음에 열릴 때 기록)
-    const caller = String(new Error().stack || '').split('\n').slice(2, 7).map((l) => l.trim()).join('\n');
-    try { sessionStorage.setItem(CODE_FLAG, JSON.stringify({ t: Date.now(), caller })); } catch { /* 무시 */ }
+    try { sessionStorage.setItem(CODE_FLAG, JSON.stringify({ t: Date.now() })); } catch { /* 무시 */ }
 }
 
 // Web Lock을 쥐고 있으면 브라우저가 탭을 정리할 때 덜 건드리는 경우가 있음 (보장은 아님)
@@ -358,9 +387,53 @@ function releaseLock() {
     lockAbort = null;
 }
 
-// 연결 유지(WebRTC)는 v1.2 방식으로 돌아가며 사용하지 않음. 기록에 '꺼짐'으로만 표시됨.
+// 화면 안에서 두 연결(WebRTC)을 서로 이어 두는 방식. 밖으로 나가는 통신·소리·알림은 없고,
+// 크롬은 연결이 살아 있는 탭을 '정지'시키지 않는 규칙이 있음 (삼성 인터넷에서도 되는지는 기록으로 확인).
 function rtcState() {
-    return '꺼짐';
+    if (!rtc) return '꺼짐';
+    return rtc.b.connectionState || rtc.b.iceConnectionState || '?';
+}
+
+function stopKeepAlive() {
+    try { rtc?.a.close(); rtc?.b.close(); } catch { /* 무시 */ }
+    rtc = null;
+}
+
+async function startKeepAlive() {
+    if (rtc || typeof RTCPeerConnection === 'undefined') return;
+    try {
+        const a = new RTCPeerConnection({ iceServers: [] });
+        const b = new RTCPeerConnection({ iceServers: [] });
+        rtc = { a, b };
+        a.onicecandidate = (e) => { if (e.candidate) b.addIceCandidate(e.candidate).catch(() => {}); };
+        b.onicecandidate = (e) => { if (e.candidate) a.addIceCandidate(e.candidate).catch(() => {}); };
+        b.onconnectionstatechange = () => {
+            if (b.connectionState === 'failed' && !rtcErrNoted) {
+                rtcErrNoted = true;
+                addLog('error', '연결 유지(WebRTC) 연결이 실패했어요', '네트워크 연결이 없거나 브라우저가 막았을 수 있어요');
+            }
+        };
+        a.createDataChannel('rf-keep');
+        const offer = await a.createOffer();
+        await a.setLocalDescription(offer);
+        await b.setRemoteDescription(offer);
+        const answer = await b.createAnswer();
+        await b.setLocalDescription(answer);
+        await a.setRemoteDescription(answer);
+    } catch (err) {
+        stopKeepAlive();
+        if (!rtcErrNoted) {
+            rtcErrNoted = true;
+            logErr('연결 유지(WebRTC)를 시작하지 못했어요', err);
+        }
+    }
+}
+
+// 연결이 끊겼으면 다시 만듦 (앱에 돌아왔을 때 등)
+function ensureKeepAlive() {
+    if (rtc && !['failed', 'closed', 'disconnected'].includes(rtcState())) return;
+    stopKeepAlive();
+    startKeepAlive();
 }
 
 // 방지 기능은 '새로고침 활성화'와 상관없이 자기 설정(guard)만 따름
@@ -373,11 +446,13 @@ function applyGuard() {
 
     if (!on) {
         releaseLock();
+        stopKeepAlive();
         return;
     }
     nav?.addEventListener('navigate', onNavigate);
     window.addEventListener('beforeunload', onBeforeUnload);
     acquireLock();
+    ensureKeepAlive();
 }
 
 /* ---------------- 페이지 상태 추적 / 새로고침 원인 분석 ---------------- */
@@ -405,6 +480,7 @@ function beat(why) {
 function startHeartbeat() {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') lastHiddenAt = Date.now();
+        else if (getSettings().guard) ensureKeepAlive();
         beat(`visibility:${document.visibilityState}`);
     });
     window.addEventListener('pagehide', (e) => {
@@ -449,7 +525,7 @@ function checkLoadReason() {
         return;
     }
     if (codeInfo && now - codeInfo.t < 15000) {
-        addLog('info', '코드가 일으킨 새로고침이에요 (실리태번·확장이 필요해서 한 것)', `호출 위치:\n${codeInfo.caller || '(알 수 없음)'}`);
+        addLog('info', '코드가 일으킨 새로고침이에요 (실리태번·확장이 필요해서 한 것)');
         return;
     }
     if (!getSettings().guard) return;

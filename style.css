@@ -1,4 +1,4 @@
-/* 새로고침 (refresh_button) — CSS 버전: v1.9.1
+/* 새로고침 (refresh_button) — CSS 버전: v1.9.4
  * ★ 코드를 고칠 때마다 이 버전을 올릴 것! (index.js 의 버전과 같은 숫자로)
  *
  * 주의: .inline-drawer-content 의 display는 건드리지 않는다. (접기/펼치기는 SillyTavern이 제어)
@@ -406,12 +406,6 @@
     text-align: center;
     font-size: 1.15em;
     font-weight: 700;
-}
-
-/* 당겨서 새로고침(모바일 크롬) 막기 */
-html.rf-guard,
-html.rf-guard body {
-    overscroll-behavior-y: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
